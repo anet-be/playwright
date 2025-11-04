@@ -39,6 +39,7 @@ import type * as channels from '@protocol/channels';
 import type * as actions from '@recorder/actions';
 import type { CallLog, CallLogStatus, ElementInfo, Mode, OverlayState, Source, UIState } from '@recorder/recorderTypes';
 import type { RegisteredListener } from '../utils';
+import { scheduleDumpFrameTree } from './utils/debugDumpHtml';
 
 const recorderSymbol = Symbol('recorderSymbol');
 
@@ -545,12 +546,14 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
   private _onFrameNavigated(frame: Frame, page: Page) {
     const pageAlias = this._pageAliases.get(page);
     this._signalProcessor.signal(pageAlias!, frame, { name: 'navigation', url: frame.url() });
+    scheduleDumpFrameTree(page, pageAlias!);
   }
 
   private _onPopup(page: Page, popup: Page) {
     const pageAlias = this._pageAliases.get(page)!;
     const popupAlias = this._pageAliases.get(popup)!;
     this._signalProcessor.signal(pageAlias, page.mainFrame(), { name: 'popup', popupAlias });
+    scheduleDumpFrameTree(page, popupAlias!);
   }
 
   private _onDownload(page: Page) {
