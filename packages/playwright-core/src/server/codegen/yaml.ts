@@ -1,7 +1,74 @@
-// packages/playwright-core/src/server/codegen/yaml.ts
 import * as YAML from 'js-yaml';
 import type { Language, LanguageGenerator, LanguageGeneratorOptions } from './types';
+import { parseAttributeSelector, parseSelector, stringifySelector } from '../../utils/isomorphic/selectorParser';
 import type * as actions from '@recorder/actions';
+
+
+type TextMatcher =
+  | string
+  | { value: string; exact: boolean }
+  | { pattern: string; flags: string };
+
+
+function parseTextSpec(input?: string): TextMatcher | undefined {
+  if (!input) return undefined;
+
+  function parseJsonString(q: string): string | undefined {
+    try {
+      const v = JSON.parse(q);
+      return typeof v === "string" ? v : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  // Escape a string for literal use inside a RegExp
+  function escapeRegex(s: string): string {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  // Regex literal: /pattern/flags
+  const rx = input.match(/^\/([\s\S]*)\/([dgimsuyv]*)$/);
+  if (rx) {
+    try {
+      const rgx = new RegExp(rx[1], rx[2]);
+      return { pattern: rgx.source, flags: rgx.flags };
+    } catch {
+      /* fall through */
+    }
+  }
+
+  // Suffix forms: `"..."s` or `"..."i`
+  //   `i`: case-insensitive
+  //   `s`: case-sensitive
+  if (input.endsWith('"s') || input.endsWith('"i')) {
+    const suffix = input.at(-1)!;          // 's' | 'i'
+    const quoted = input.slice(0, -1);     // keep the closing quote
+    if (quoted.startsWith('"') && quoted.endsWith('"')) {
+      const decoded = parseJsonString(quoted);
+      if (decoded !== undefined) {
+        if (suffix === "s") {
+          // exact, case-sensitive
+          return { value: decoded, exact: true };
+        } else {
+          // exact, case-insensitive → compile to ^text$ with /i
+          return { pattern: `${escapeRegex(decoded)}`, flags: 'i' };
+        }
+      }
+    }
+  }
+
+  // Plain quoted JSON string: `"..."`
+  if (input.startsWith('"') && input.endsWith('"')) {
+    const decoded = parseJsonString(input);
+    if (decoded !== undefined)
+      return decoded;
+  }
+
+  // Fallback: non-exact plain text
+  return input;
+}
+
 
 function frameRefFromString(sel: string) {
   const m = sel.match(/^frame\[name="(.+)"\]$/);
@@ -9,54 +76,38 @@ function frameRefFromString(sel: string) {
   return { selector: sel }; // fallback
 }
 
+
 function framePathToObjects(path?: string[]) {
   if (!path?.length) return undefined;
   return path.map(frameRefFromString);
 }
 
-// ---- parse recorder's "internal:" strings into a structured element (best-effort) ----
-function elementFromRecorderRaw(raw?: string): { element: any; debug?: { raw: string } } | undefined {
-  if (!raw) return undefined;
-  // testId (works when you run codegen with --test-id-attribute)
-  {
-    const m = raw.match(/internal:testid=.*?"([^"]+)"/);
-    if (m) return { element: { testId: m[1] }, debug: { raw } };
-  }
-  // role+name
-  {
-    const m = raw.match(/internal:role=.*?name="([^"]+)"[^\]]*\]/);
-    const role = raw.match(/internal:role=([a-zA-Z]+)/)?.[1];
-    if (role) return { element: { role, name: m?.[1] }, debug: { raw } };
-  }
-  // text (best-effort)
-  {
-    const m = raw.match(/internal:text="([^"]+)"/);
-    if (m) return { element: { text: { value: m[1], exact: false } }, debug: { raw } };
-  }
-  // fallback: css-like
-  return { element: { css: raw }, debug: { raw } };
-}
 
 function isActionWithSelector(action: any): action is actions.ActionWithSelector {
   return action && (action as any)?.selector;
 }
 
-// Build the structured selector object we want in the schema
-function buildStructuredSelector(a: actions.ActionInContext): any {
-  const action = a.action;
+
+function buildStructuredSelector(actionInContext: actions.ActionInContext, debug: Record<string, any> | undefined): any {
+  const selector: Record<string, any> = {};
+
+  const frame = actionInContext.frame
+  if (frame.pageAlias) selector.page = frame.pageAlias;
+  const framePath = framePathToObjects(frame.framePath);
+  if (framePath) selector.framePath = framePath;
+
+  const action: actions.Action = actionInContext.action;
   if (isActionWithSelector(action)) {
     const raw = action.selector;
-    const parsed = elementFromRecorderRaw(raw);
-    const framePath = framePathToObjects(a.frame.framePath);
-    const selector: any = {
-      element: parsed?.element ?? { css: raw ?? 'UNKNOWN' },
-    };
-    if (framePath) selector.framePath = framePath;
-    if (parsed?.debug) selector.debug = parsed.debug;
-    return selector;
+    const mapped = elementFromParsedSelector(raw, debug);
+    selector.element = mapped?.element ?? { css: raw ?? 'UNKNOWN' };
+    if (mapped?.filters) selector.filters = mapped.filters;
+    if (typeof mapped?.nth === 'number') selector.nth = mapped.nth;
   }
-  return undefined;
+
+  return selector;
 }
+
 
 // Simple default stripper
 function stripDefaults<T extends Record<string, any>>(obj: T): T {
@@ -72,6 +123,7 @@ function stripDefaults<T extends Record<string, any>>(obj: T): T {
   }
   return out;
 }
+
 
 function stripEmpty<T extends Record<string, any>>(obj: T): Partial<T> {
   const out: any = {};
@@ -91,39 +143,13 @@ function stripEmpty<T extends Record<string, any>>(obj: T): Partial<T> {
   return out;
 }
 
-// Make any object YAML-safe: remove functions/symbols/undefined,
-// handle cycles, and stringify common non-plain values.
-function serializeForYaml(input: any, seen = new WeakSet()): any {
-  const t = typeof input;
-  if (input == null || t === 'string' || t === 'number' || t === 'boolean') return input;
-  if (t === 'bigint') return input.toString();
-  if (t === 'function' || t === 'symbol' || t === 'undefined') return undefined;
-
-  if (input instanceof URL) return input.toString();
-  if (input instanceof Date) return input.toISOString();
-  if (input instanceof RegExp) return String(input);
-
-  if (Array.isArray(input)) return input.map(v => serializeForYaml(v, seen));
-
-  if (t === 'object') {
-    if (seen.has(input)) return '[Circular]';
-    seen.add(input);
-    const out: Record<string, any> = {};
-    for (const [k, v] of Object.entries(input)) {
-      const sv = serializeForYaml(v, seen);
-      if (sv !== undefined) out[k] = sv;
-    }
-    return out;
-  }
-  // Fallback
-  try { return JSON.parse(JSON.stringify(input)); } catch { return String(input); }
-}
 
 function formatAsYamlListItem(entry: unknown, dumpOpts: any): string {
   const dumped = YAML.dump(entry, dumpOpts).replace(/\r\n?/g, '\n');
   const lines = dumped.endsWith('\n') ? dumped.slice(0, -1).split('\n') : dumped.split('\n');
   return lines.map((line, i) => (i === 0 ? `  - ${line}` : `    ${line}`)).join('\n') + '\n';
 }
+
 
 // Mask values that look like passwords
 function matchText(t: string | { value: string; regex?: string; exact?: boolean }): boolean {
@@ -132,6 +158,7 @@ function matchText(t: string | { value: string; regex?: string; exact?: boolean 
   if (t.regex && /password|pwd|secret/i.test(t.regex)) return true;
   return false;
 }
+
 
 function maybeMaskValue(el: any, text: string | undefined): string | undefined {
   if (text == null) return text;
@@ -148,6 +175,7 @@ function maybeMaskValue(el: any, text: string | undefined): string | undefined {
   return text;
 }
 
+
 // URLs we consider noise for the first step
 const TRIVIAL_URL_PREFIXES = [
   'about:blank',
@@ -159,9 +187,189 @@ const TRIVIAL_URL_PREFIXES = [
   'chrome-extension://',
 ];
 
+
 function isTrivialUrl(url?: string): boolean {
   if (!url) return true;
   return TRIVIAL_URL_PREFIXES.some(p => url.startsWith(p));
+}
+
+
+function toUrlHint(url?: string): any | undefined {
+  if (!url || isTrivialUrl(url)) return undefined;
+  try {
+    const u = new URL(url);
+    const path = u.pathname.replace(/\/+$/, '');
+    if (path && path !== '/') return { url_contains: path };
+  } catch { /* ignore */ }
+  return { url_exact: url };
+}
+
+
+function elementFromParsedSelector(raw?: string, debug?: Record<string, any>): { element: any; filters?: any; nth?: number } | undefined {
+  if (!raw) return undefined;
+
+  let parsed: ReturnType<typeof parseSelector>;
+  try {
+    parsed = parseSelector(raw);
+  } catch {
+    return undefined;
+  }
+
+  if (debug) debug.parsed_selector = { parsed: parsed };
+
+  // Pick the captured part if present (what Playwright intends as the target).
+  let baseIndex: number;
+  const FILTER_ENGINES = new Set(['internal:has-text', 'internal:has', 'nth']);
+  if (typeof parsed.capture === 'number' && parsed.capture >= 0) {
+    baseIndex = parsed.capture;
+  } else {
+    // walk from the end to find the last non-filter engine
+    baseIndex = parsed.parts.length - 1;
+    for (let i = parsed.parts.length - 1; i >= 0; i--) {
+      if (!FILTER_ENGINES.has(parsed.parts[i]?.name)) {
+        baseIndex = i;
+        break;
+      }
+    }
+  }
+
+  // Base part (element) comes from baseIndex
+  if (debug) debug.parsed_selector.baseIndex = baseIndex;
+  const basePart = parsed.parts[baseIndex];
+  if (debug) debug.parsed_selector.basePart = basePart;
+
+  // Map basePart onto our structures
+  if (!basePart) {
+    return { element: { css: raw } };
+  }
+
+  const element: Record<string, any> = {};
+
+  switch (basePart.name) {
+    // case 'internal:describe': {}
+    // case 'visible': {}
+    // case 'internal:has-not-text': {}
+    // case 'internal:has': {}
+    // case 'internal:has-not': {}
+    // case 'internal:and': {}
+    // case 'internal:or': {}
+    // case 'internal:chain': {}
+    // case 'internal:attr': {}
+    // case 'internal:control': {}
+
+    case 'internal:testid': {
+      // Example body: `"login-password"`
+      const attrSelector = parseAttributeSelector(basePart.body as string, true);
+      const { value } = attrSelector.attributes[0];
+      element.testId = value;
+      break;
+    }
+
+    case 'internal:role': {
+      // Example body: `button[name="Submit"i]` or `textbox[name=/Email/i]`
+      const attrSelector = parseAttributeSelector(basePart.body as string, true);
+      element.role = attrSelector.name;
+      for (const attr of attrSelector.attributes) {
+        if (attr.name === 'name') {
+          element.name = attr.value;
+          // TODO: Not making use of `caseSensitive`
+          // The recorder usually gives back role[name="text"i] with `i` meaning case case-insensitive
+          // element.exact = attr.caseSensitive;
+        } else {
+          // TODO: we ignore all other options...
+          // See locatorGenerators.ts:151
+        }
+      }
+      break;
+    }
+
+    case 'internal:text': {
+      // Example body: `"Sign in"` or `/Sign\s+in/i`
+      element.text = parseTextSpec(basePart.body as string | undefined);
+      break;
+    }
+
+    case 'css':
+    case 'css:light': {
+      // TODO: map the "body" object?
+      element.css = basePart.source;
+      break;
+    }
+
+    case 'xpath': {
+      element.xpath = basePart.source;
+      break;
+    }
+
+    case 'internal:label': {
+      // Example body: `"Email"` or `/E-mail/i`
+      element.label = parseTextSpec(basePart.body as string | undefined);
+      break;
+    }
+
+    case 'internal:placeholder': {
+      element.placeholder = parseTextSpec(basePart.body as string | undefined);
+      break;
+    }
+
+    default: {
+      // Unknown engine (internal:has, spatial filters, etc.) — stringify to something stable
+      element.css = stringifySelector(parsed);
+      if (debug) (debug.parsed_selector.warnings ??= []).push(`unhandled engine ${basePart.name}`);
+    }
+  }
+
+  // Everything after baseIndex are post-filters/position
+  let filters: any | undefined;
+  let nth: number | undefined;
+  for (const part of parsed.parts.slice(baseIndex + 1)) {
+    switch (part?.name) {
+      case 'internal:has-text': {
+        (filters ??= {}).hasText = parseTextSpec(part.body as string | undefined);
+        break;
+      }
+      case 'nth': {
+        const n = parseInt(String(part.body ?? ''), 10);
+        if (Number.isFinite(n)) nth = n;
+        break;
+      }
+      default: {
+        if (debug) (debug.parsed_selector.warnings ??= []).push(`unhandled parsed attribute part ${part?.name}`);
+        break;
+      }
+    }
+  }
+
+  return { element, filters, nth }
+}
+
+
+function expectFromSignals(action: actions.Action): any | undefined {
+  const signals = action?.signals;
+  if (!Array.isArray(signals) || signals.length === 0) return undefined;
+  const expect: any = {};
+  for (const signal of (signals as actions.Signal[])) {
+    switch (signal.name) {
+      case 'navigation': {
+        const hint = toUrlHint(signal.url);
+        if (hint) expect.navigation = hint;
+        break;
+      }
+      case 'popup': {
+        expect.popup = true;
+        break;
+      }
+      case 'download': {
+        expect.download = true;
+        break;
+      }
+      case 'dialog': {
+        expect.dialog = true;
+        break;
+      }
+    }
+  }
+  return Object.keys(expect).length ? expect : undefined;
 }
 
 
@@ -175,9 +383,10 @@ export class YamlLanguageGenerator implements LanguageGenerator {
   private _headerEmitted = false;
   private _seedUrl: string | undefined;
   private _meta: { version: string; name: string; baseURL?: string } = {
-    version: '0.1',
+    version: '0.2',
     name: 'Recorded Scenario',
   };
+  private _debug = false;
 
   private _emitHeaderOnce(): string[] {
     if (this._headerEmitted) return [];
@@ -195,32 +404,35 @@ export class YamlLanguageGenerator implements LanguageGenerator {
   }
 
   generateHeader(options: LanguageGeneratorOptions): string {
+    // Little hack to turn on debug info in the generated yaml
+    if (process.env.GENFEST_HTML_DIR) this._debug = true;
+
     // Derive defaults early so header can include them.
     this._seedUrl = options?.contextOptions?.baseURL || undefined;
-
     this._meta = {
       version: '0.1',
       name: (this._seedUrl ? new URL(this._seedUrl).hostname : 'Recorded Scenario'),
       baseURL: options?.contextOptions?.baseURL || this._seedUrl,
     };
-
     this._headerEmitted = false;
-
-    // // STREAM: print header now so the code window isn’t empty while recording.
-    // return this._emitHeaderOnce().join('\n');
     return '# Generated by Genfest'
   }
 
-  generateAction(a: actions.ActionInContext): string {
+  generateAction(actionInContext: actions.ActionInContext): string {
     const out: string[] = [];
 
-    const action = a.action;
-    const selector = buildStructuredSelector(a);
+    let debug: Record<string, any> | undefined = undefined;
+    if (this._debug) debug = { action_in_context: actionInContext };
 
-    // Handle actions
+    const selector = buildStructuredSelector(actionInContext, debug);
+
+    const step: Record<string, any> = {};
+
+    const action = actionInContext.action;
     switch (action.name) {
 
       // --- navigate ----------------------------------------------
+      // --- openPage ----------------------------------------------
       case 'openPage':
       case 'navigate': {
         const url = action.url;
@@ -229,114 +441,92 @@ export class YamlLanguageGenerator implements LanguageGenerator {
 
         if (!this._meta.baseURL) this._meta.baseURL = url;
         if (!this._headerEmitted) out.push(...this._emitHeaderOnce());
-        const step = {
-          action: 'navigate',
-          url: action.url,
-        }
-        out.push(formatAsYamlListItem(step, this._dumpOpts));
+
+        step.action = 'navigate';
+        step.url = url;
         break;
       }
 
       // --- click -------------------------------------------------
       case 'click': {
-        const actionName = (action.clickCount === 2) ? 'dblclick' : 'click';
-        const step = stripDefaults({
-          action: actionName,
-          selector,
-          button: action.button,
-          modifiers: action.modifiers,
-        });
-        out.push(formatAsYamlListItem(step, this._dumpOpts));
+        step.action = (action.clickCount === 2) ? 'dblclick' : 'click';
+        step.button = action.button;
+        step.modifiers = action.modifiers;
+        if (action.clickCount !== 1) step.clickCount = action.clickCount;
+        step.expect = expectFromSignals(action);
         break;
       }
 
       // --- fill --------------------------------------------------
       case 'fill': {
-        const step = stripDefaults({
-          action: 'fill',
-          selector,
-          text: maybeMaskValue(selector.element, action.text),
-        });
-        out.push(formatAsYamlListItem(step, this._dumpOpts));
+        step.action = 'fill';
+        step.text = maybeMaskValue(selector.element, action.text);
+        step.expect = expectFromSignals(action);
         break;
       }
 
       // --- press -------------------------------------------------
       case 'press': {
-        const step = stripDefaults({
-          action: 'keyPress',
-          selector,
-          key: action.key,
-          modifiers: action.modifiers,
-        });
-        out.push(formatAsYamlListItem(step, this._dumpOpts));
+        step.action = 'press';
+        step.key = action.key;
+        step.modifiers = action.modifiers;
+        step.expect = expectFromSignals(action);
         break;
       }
 
       // --- check -------------------------------------------------
       case 'check': {
-        const step = {
-          action: 'check',
-          selector,
-        }
-        out.push(formatAsYamlListItem(step, this._dumpOpts));
+        step.action = 'check';
+        step.expect = expectFromSignals(action);
         break;
       }
 
       // --- uncheck -----------------------------------------------
       case 'uncheck': {
-        const step = {
-          action: 'uncheck',
-          selector,
-        }
-        out.push(formatAsYamlListItem(step, this._dumpOpts));
+        step.action = 'uncheck';
+        step.expect = expectFromSignals(action);
         break;
       }
 
       // --- assertText --------------------------------------------
       case 'assertText': {
-        const step = {
-          action: 'assert.text',
-          selector,
-          text: action.text,
-        }
-        out.push(formatAsYamlListItem(step, this._dumpOpts));
+        step.action = 'assert.text';
+        step.text = action.text;
         break;
       }
 
       // --- assertValue -------------------------------------------
       case 'assertValue': {
-        const step = {
-          action: 'assert.value',
-          selector,
-          value: action.value,
-        }
-        out.push(formatAsYamlListItem(step, this._dumpOpts));
+        step.action = 'assert.value';
+        step.value = action.value;
         break;
       }
 
       // --- assertVisible -----------------------------------------
       case 'assertVisible': {
-        const step = {
-          action: 'assert.visible',
-          selector,
-        }
-        out.push(formatAsYamlListItem(step, this._dumpOpts));
+        step.action = 'assert.visible';
         break;
       }
 
       // --- closePage ---------------------------------------------
+      case 'closePage': {
+        step.action = 'closePage';
+        break;
+      }
+
       // --- select ------------------------------------------------
       // --- setInputFiles -----------------------------------------
       // --- assertSnapshot ----------------------------------------
       default: {
-        // Dump everything we have for unimplemented actions,
-        const raw = serializeForYaml(a);
-        out.push(formatAsYamlListItem(raw, this._dumpOpts));
+        step.action = action.name + " (NOT SUPPORTED)"
         break;
       }
     }
 
+    step.selector = selector;
+    if (this._debug) step.debug = debug;
+
+    out.push(formatAsYamlListItem(stripDefaults(step), this._dumpOpts));
     return out.join('\n');
   }
 
