@@ -508,6 +508,13 @@ export class YamlLanguageGenerator implements LanguageGenerator {
         break;
       }
 
+      // --- assertChecked -----------------------------------------
+      case 'assertChecked': {
+        step.action = 'assertChecked';
+        step.checked = action.checked;
+        break;
+      }
+
       // --- closePage ---------------------------------------------
       case 'closePage': {
         step.action = 'closePage';
@@ -519,6 +526,7 @@ export class YamlLanguageGenerator implements LanguageGenerator {
       // --- assertSnapshot ----------------------------------------
       default: {
         step.action = action.name + " (NOT SUPPORTED)"
+        if (!this._debug) step.debug = { action_in_context: actionInContext };
         break;
       }
     }
