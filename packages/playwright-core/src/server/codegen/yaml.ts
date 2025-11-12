@@ -194,17 +194,6 @@ function isTrivialUrl(url?: string): boolean {
 }
 
 
-function toUrlHint(url?: string): any | undefined {
-  if (!url || isTrivialUrl(url)) return undefined;
-  try {
-    const u = new URL(url);
-    const path = u.pathname.replace(/\/+$/, '');
-    if (path && path !== '/') return { url_contains: path };
-  } catch { /* ignore */ }
-  return { url_exact: url };
-}
-
-
 function elementFromParsedSelector(raw?: string, debug?: Record<string, any>): { element: any; filters?: any; nth?: number } | undefined {
   if (!raw) return undefined;
 
@@ -344,32 +333,67 @@ function elementFromParsedSelector(raw?: string, debug?: Record<string, any>): {
 }
 
 
-function expectFromSignals(action: actions.Action): any | undefined {
-  const signals = action?.signals;
-  if (!Array.isArray(signals) || signals.length === 0) return undefined;
-  const expect: any = {};
-  for (const signal of (signals as actions.Signal[])) {
-    switch (signal.name) {
-      case 'navigation': {
-        const hint = toUrlHint(signal.url);
-        if (hint) expect.navigation = hint;
-        break;
-      }
-      case 'popup': {
-        expect.popup = true;
-        break;
-      }
-      case 'download': {
-        expect.download = true;
-        break;
-      }
-      case 'dialog': {
-        expect.dialog = true;
-        break;
-      }
+type UrlHint =
+  | { url_exact: string }
+  | { url_contains: string };
+
+
+type Expectation =
+  | ({ expect: "navigation" } & Partial<UrlHint>)
+  | { expect: "popup"; pageAlias?: string }
+  | { expect: "download" }
+  | { expect: "dialog"; type?: "alert" | "beforeunload" | "confirm" | "prompt" }; // extend if you record message/accepted
+
+
+function expectFromSignals(action: actions.Action): Expectation[] | undefined {
+
+  function toUrlHint(url?: string): UrlHint | undefined {
+    if (!url) return undefined;
+    try {
+      const u = new URL(url);
+      // exact for absolute http(s), contains otherwise
+      return u.protocol === "http:" || u.protocol === "https:"
+        ? { url_exact: url }
+        : { url_contains: url };
+    } catch {
+      return { url_contains: url };
     }
   }
-  return Object.keys(expect).length ? expect : undefined;
+
+  const signals = action?.signals;
+  if (!Array.isArray(signals) || signals.length === 0) return undefined;
+
+  const expectations: Expectation[] = [];
+
+  for (const signal of signals as actions.Signal[]) {
+    switch (signal.name) {
+      case "navigation": {
+        const hint = toUrlHint(signal.url);
+        expectations.push(
+          hint ? { expect: "navigation", ...hint } : { expect: "navigation" }
+        );
+        break;
+      }
+      case "popup": {
+        expectations.push({ expect: "popup", pageAlias: signal.popupAlias });
+        break;
+      }
+      case "download": {
+        expectations.push({ expect: "download" });
+        break;
+      }
+      case "dialog": {
+        // If you capture dialog type/message/accepted, add them here
+        expectations.push({ expect: "dialog" });
+        break;
+      }
+      default:
+        // ignore unknown signals
+        break;
+    }
+  }
+
+  return expectations.length ? expectations : undefined;
 }
 
 
@@ -453,7 +477,7 @@ export class YamlLanguageGenerator implements LanguageGenerator {
         step.button = action.button;
         step.modifiers = action.modifiers;
         if (action.clickCount !== 1) step.clickCount = action.clickCount;
-        step.expect = expectFromSignals(action);
+        step.expectations = expectFromSignals(action);
         break;
       }
 
@@ -461,7 +485,7 @@ export class YamlLanguageGenerator implements LanguageGenerator {
       case 'fill': {
         step.action = 'fill';
         step.text = maybeMaskValue(selector.element, action.text);
-        step.expect = expectFromSignals(action);
+        step.expectations = expectFromSignals(action);
         break;
       }
 
@@ -470,21 +494,21 @@ export class YamlLanguageGenerator implements LanguageGenerator {
         step.action = 'press';
         step.key = action.key;
         step.modifiers = action.modifiers;
-        step.expect = expectFromSignals(action);
+        step.expectations = expectFromSignals(action);
         break;
       }
 
       // --- check -------------------------------------------------
       case 'check': {
         step.action = 'check';
-        step.expect = expectFromSignals(action);
+        step.expectations = expectFromSignals(action);
         break;
       }
 
       // --- uncheck -----------------------------------------------
       case 'uncheck': {
         step.action = 'uncheck';
-        step.expect = expectFromSignals(action);
+        step.expectations = expectFromSignals(action);
         break;
       }
 
