@@ -73,7 +73,7 @@ function parseTextSpec(input?: string): TextMatcher | undefined {
 function frameRefFromString(sel: string) {
   const m = sel.match(/^frame\[name="(.+)"\]$/);
   if (m) return { name: m[1] as string };
-  return { selector: sel }; // fallback
+  return { url_contains: sel }; // fallback
 }
 
 
@@ -208,18 +208,45 @@ function elementFromParsedSelector(raw?: string, debug?: Record<string, any>): {
 
   // Pick the captured part if present (what Playwright intends as the target).
   let baseIndex: number;
-  const FILTER_ENGINES = new Set(['internal:has-text', 'internal:has', 'nth']);
+  const FILTER_ENGINES = new Set([
+    'internal:has-text',
+    'internal:has-not-text',
+    'internal:has',
+    'internal:has-not',
+    'visible',
+    'nth',
+  ]);
+  const IGNORE_ENGINES = new Set(['internal:describe']);
+
   if (typeof parsed.capture === 'number' && parsed.capture >= 0) {
     baseIndex = parsed.capture;
   } else {
-    // walk from the end to find the last non-filter engine
-    baseIndex = parsed.parts.length - 1;
+    // walk from the end to find the last non-filter engine,
+    baseIndex = -1;
     for (let i = parsed.parts.length - 1; i >= 0; i--) {
-      if (!FILTER_ENGINES.has(parsed.parts[i]?.name)) {
+      const name = parsed.parts[i]?.name;
+      if (!name) continue;
+      if (IGNORE_ENGINES.has(name)) continue;
+      if (!FILTER_ENGINES.has(name)) {
         baseIndex = i;
         break;
       }
     }
+
+    // Fallback: if we never found a non-filter, non-ignored part,
+    // just point at the last part and let the default case handle it.
+    if (baseIndex === -1)
+      baseIndex = parsed.parts.length - 1;
+  }
+
+  // If we still landed on an ignored engine (e.g. captured describe),
+  // walk backwards until we hit something real or give up.
+  while (baseIndex >= 0 && IGNORE_ENGINES.has(parsed.parts[baseIndex]?.name)) {
+    baseIndex--;
+  }
+  if (baseIndex < 0) {
+    // Nothing usable — treat as a raw css-ish selector.
+    return { element: { css: raw } };
   }
 
   // Base part (element) comes from baseIndex
@@ -235,15 +262,9 @@ function elementFromParsedSelector(raw?: string, debug?: Record<string, any>): {
   const element: Record<string, any> = {};
 
   switch (basePart.name) {
-    // case 'internal:describe': {}
-    // case 'visible': {}
-    // case 'internal:has-not-text': {}
-    // case 'internal:has': {}
-    // case 'internal:has-not': {}
     // case 'internal:and': {}
     // case 'internal:or': {}
     // case 'internal:chain': {}
-    // case 'internal:attr': {}
     // case 'internal:control': {}
 
     case 'internal:testid': {
@@ -255,18 +276,90 @@ function elementFromParsedSelector(raw?: string, debug?: Record<string, any>): {
     }
 
     case 'internal:role': {
-      // Example body: `button[name="Submit"i]` or `textbox[name=/Email/i]`
+      // Example body: `button[name="Submit"i][include-hidden]`
+      //                or `textbox[name=/Email/i][level=3]`
       const attrSelector = parseAttributeSelector(basePart.body as string, true);
       element.role = attrSelector.name;
+
       for (const attr of attrSelector.attributes) {
-        if (attr.name === 'name') {
-          element.name = attr.value;
-          // TODO: Not making use of `caseSensitive`
-          // The recorder usually gives back role[name="text"i] with `i` meaning case case-insensitive
-          // element.exact = attr.caseSensitive;
-        } else {
-          // TODO: we ignore all other options...
-          // See locatorGenerators.ts:151
+        const name = attr.name;
+
+        // Helper: turn attribute into boolean-ish value
+        const asBool = (): boolean | undefined => {
+          if (attr.op === '<truthy>') return true;
+          const v = attr.value;
+          if (typeof v === 'boolean') return v;
+          if (typeof v === 'string') {
+            const s = v.toLowerCase();
+            if (s === 'true') return true;
+            if (s === 'false') return false;
+          }
+          return undefined;
+        };
+
+        switch (name) {
+          case 'name': {
+            const v = attr.value;
+
+            let matcher: TextMatcher | undefined;
+
+            if (v instanceof RegExp) {
+              // Playwright parsed a real regex for the accessible name.
+              matcher = { pattern: v.source, flags: v.flags };
+            } else if (v != null) {
+              const s = String(v);
+              if (attr.caseSensitive) {
+                // Exact, case-sensitive accessible name.
+                matcher = { value: s, exact: true };
+              } else {
+                // Non-exact / case-insensitive-ish name → plain string.
+                matcher = s;
+              }
+            }
+
+            if (matcher !== undefined) {
+              (element as any).name = matcher;
+            }
+            break;
+          }
+
+          case 'include-hidden': {
+            const v = asBool();
+            if (v !== undefined)
+              element.include_hidden = v;
+            break;
+          }
+
+          case 'level': {
+            const raw = attr.value;
+            const n = typeof raw === 'number' ? raw : Number(raw);
+            if (Number.isFinite(n))
+              element.level = n;
+            break;
+          }
+
+          case 'checked':
+          case 'pressed':
+          case 'selected':
+          case 'expanded':
+          case 'disabled': {
+            const v = asBool();
+            if (v !== undefined) {
+              // Use the attribute name directly as the field name on element
+              (element as any)[name] = v;
+            } else if (typeof attr.value === 'string') {
+              // e.g. checked="mixed" – keep the raw string if your schema allows it
+              (element as any)[name] = attr.value;
+            }
+            break;
+          }
+
+          default: {
+            // Any extra role attributes we don't know about yet
+            if (debug) (debug.parsed_selector.warnings ??= [])
+              .push(`unhandled internal:role attribute [${name}]`);
+            break;
+          }
         }
       }
       break;
@@ -301,6 +394,49 @@ function elementFromParsedSelector(raw?: string, debug?: Record<string, any>): {
       break;
     }
 
+    case 'internal:attr': {
+      // Example body: `[alt="Logo"]`, `[title="Tooltip"]` or `[placeholder="Search"]`
+      const attrSelector = parseAttributeSelector(basePart.body as string, true);
+      const first = attrSelector.attributes[0];
+      if (!first) {
+        // Fall back to the previous behaviour: stringify the whole selector.
+        element.css = stringifySelector(parsed);
+        if (debug) (debug.parsed_selector.warnings ??= [])
+          .push('internal:attr without attributes');
+        break;
+      }
+
+      const attrName = first.name.toLowerCase();
+      const body = String(basePart.body ?? '');
+
+      // Try to recover the original textual value (`"Text"`, `/re/i`, etc.).
+      let rawValueSource: string | undefined;
+      const m = body.match(/=\s*(.+)\s*\]$/);
+      if (m) rawValueSource = m[1];
+
+      const textMatcher = rawValueSource ? parseTextSpec(rawValueSource) : undefined;
+      const value = textMatcher ?? first.value;
+
+      switch (attrName) {
+        case 'alt':
+          (element as any).alt = value;
+          break;
+        case 'title':
+          (element as any).title = value;
+          break;
+        case 'placeholder':
+          (element as any).placeholder = value;
+          break;
+        default:
+          // Unknown attribute name: degrade gracefully to css selector.
+          element.css = stringifySelector(parsed);
+          if (debug) (debug.parsed_selector.warnings ??= [])
+            .push(`unhandled internal:attr attribute [${attrName}]`);
+          break;
+      }
+      break;
+    }
+
     default: {
       // Unknown engine (internal:has, spatial filters, etc.) — stringify to something stable
       element.css = stringifySelector(parsed);
@@ -312,18 +448,63 @@ function elementFromParsedSelector(raw?: string, debug?: Record<string, any>): {
   let filters: any | undefined;
   let nth: number | undefined;
   for (const part of parsed.parts.slice(baseIndex + 1)) {
-    switch (part?.name) {
+    if (!part || part.name === 'internal:describe')
+      continue;
+
+    switch (part.name) {
       case 'internal:has-text': {
         (filters ??= {}).hasText = parseTextSpec(part.body as string | undefined);
         break;
       }
+
+      case 'internal:has-not-text': {
+        (filters ??= {}).hasNotText = parseTextSpec(part.body as string | undefined);
+        break;
+      }
+
+      case 'visible': {
+        // Playwright normalizes things like filter(,visible=true/false).
+        // Treat "false" explicitly, everything else → true.
+        const raw = (part.body ?? 'true') as string;
+        const s = String(raw).trim().toLowerCase();
+        (filters ??= {}).visible = s !== 'false';
+        break;
+      }
+
+      case 'internal:has': {
+        // body is a NestedSelectorBody: { parsed: ParsedSelector, distance?: number }
+        const nestedParsed = (part.body as any)?.parsed;
+        if (nestedParsed) {
+          const nestedRaw = stringifySelector(nestedParsed);
+          const nested = elementFromParsedSelector(nestedRaw);
+          if (nested) {
+            (filters ??= {}).has = nested;
+          }
+        }
+        break;
+      }
+
+      case 'internal:has-not': {
+        const nestedParsed = (part.body as any)?.parsed;
+        if (nestedParsed) {
+          const nestedRaw = stringifySelector(nestedParsed);
+          const nested = elementFromParsedSelector(nestedRaw);
+          if (nested) {
+            (filters ??= {}).hasNot = nested;
+          }
+        }
+        break;
+      }
+
       case 'nth': {
         const n = parseInt(String(part.body ?? ''), 10);
         if (Number.isFinite(n)) nth = n;
         break;
       }
+
       default: {
-        if (debug) (debug.parsed_selector.warnings ??= []).push(`unhandled parsed attribute part ${part?.name}`);
+        if (debug) (debug.parsed_selector.warnings ??= [])
+          .push(`unhandled parsed attribute part ${part?.name}`);
         break;
       }
     }
@@ -382,9 +563,13 @@ function expectFromSignals(action: actions.Action): Expectation[] | undefined {
         expectations.push({ expect: "download" });
         break;
       }
-      case "dialog": {
-        // If you capture dialog type/message/accepted, add them here
-        expectations.push({ expect: "dialog" });
+      case 'dialog': {
+        const s: any = signal;
+        const exp: any = { expect: 'dialog' };
+        if (s.dialogType) exp.type = s.dialogType;
+        if (s.message) exp.message = s.message;
+        if (typeof s.accepted === 'boolean') exp.accepted = s.accepted;
+        expectations.push(exp);
         break;
       }
       default:
@@ -433,11 +618,8 @@ export class YamlLanguageGenerator implements LanguageGenerator {
 
     // Derive defaults early so header can include them.
     this._seedUrl = options?.contextOptions?.baseURL || undefined;
-    this._meta = {
-      version: '0.1',
-      name: (this._seedUrl ? new URL(this._seedUrl).hostname : 'Recorded Scenario'),
-      baseURL: options?.contextOptions?.baseURL || this._seedUrl,
-    };
+    this._meta.name = (this._seedUrl ? new URL(this._seedUrl).hostname : 'Recorded Scenario');
+    this._meta.baseURL = options?.contextOptions?.baseURL || this._seedUrl;
     this._headerEmitted = false;
     return '# Generated by Genfest'
   }
@@ -473,10 +655,16 @@ export class YamlLanguageGenerator implements LanguageGenerator {
 
       // --- click -------------------------------------------------
       case 'click': {
-        step.action = (action.clickCount === 2) ? 'dblclick' : 'click';
-        step.button = action.button;
-        step.modifiers = action.modifiers;
-        if (action.clickCount !== 1) step.clickCount = action.clickCount;
+        if (action.clickCount === 2) {
+          step.action = 'dblclick';
+          step.button = action.button;
+          step.modifiers = action.modifiers;
+        } else {
+          step.action = 'click';
+          step.button = action.button;
+          step.modifiers = action.modifiers;
+          if (action.clickCount !== 1) step.clickCount = action.clickCount;
+        }
         step.expectations = expectFromSignals(action);
         break;
       }
@@ -529,12 +717,15 @@ export class YamlLanguageGenerator implements LanguageGenerator {
       // --- assertVisible -----------------------------------------
       case 'assertVisible': {
         step.action = 'assert.visible';
+        if ((action as any).isNot) {
+          step.visible = false;
+        }
         break;
       }
 
       // --- assertChecked -----------------------------------------
       case 'assertChecked': {
-        step.action = 'assertChecked';
+        step.action = 'assert.checked';
         step.checked = action.checked;
         break;
       }
@@ -546,6 +737,25 @@ export class YamlLanguageGenerator implements LanguageGenerator {
       }
 
       // --- select ------------------------------------------------
+      case 'select': {
+        step.action = 'select';
+        step.options = (action.options || []).map((opt: any) => {
+          if (typeof opt === 'string') {
+            // Default PW semantics: string -> value
+            return { value: opt };
+          }
+          if (typeof opt === 'object') {
+            if (opt.label != null) return { label: opt.label };
+            if (opt.value != null) return { value: opt.value };
+            if (opt.index != null) return { index: opt.index };
+          }
+          // Last-resort: stringify to value
+          return { value: String(opt) };
+        });
+        step.expectations = expectFromSignals(action);
+        break;
+      }
+
       // --- setInputFiles -----------------------------------------
       // --- assertSnapshot ----------------------------------------
       default: {
