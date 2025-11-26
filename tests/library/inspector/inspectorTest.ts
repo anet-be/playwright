@@ -34,6 +34,7 @@ type CLITestArgs = {
 
 const codegenLang2Id: Map<string, string> = new Map([
   ['JSON', 'jsonl'],
+  ['YAML', 'yaml'],
   ['JavaScript', 'javascript'],
   ['Java', 'java'],
   ['Java JUnit', 'java-junit'],
