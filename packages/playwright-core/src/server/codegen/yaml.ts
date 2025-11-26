@@ -1,22 +1,57 @@
+/**
+ * Copyright (c) Microsoft Corporation.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 import * as YAML from 'js-yaml';
-import type { Language, LanguageGenerator, LanguageGeneratorOptions } from './types';
 import { parseAttributeSelector, parseSelector, stringifySelector } from '../../utils/isomorphic/selectorParser';
+import type { Language, LanguageGenerator, LanguageGeneratorOptions } from './types';
 import type * as actions from '@recorder/actions';
+import type {
+  Element,
+  Expectation,
+  FrameRef,
+  Modifier,
+  Selector,
+  SelectorFilters,
+  TextMatcher,
+} from './yamlTypes';
 
 
-type TextMatcher =
-  | string
-  | { value: string; exact: boolean }
-  | { pattern: string; flags: string };
+type ActionWithSelector = actions.Action & { selector?: string | null };
+
+
+interface YamlDebugInfo {
+  action_in_context?: actions.ActionInContext;
+  parsed_selector?: {
+    parsed?: ReturnType<typeof parseSelector>;
+    baseIndex?: number;
+    basePart?: any;
+    warnings?: string[];
+  };
+  // Allow arbitrary extra debug fields
+  [key: string]: unknown;
+}
 
 
 function parseTextSpec(input?: string): TextMatcher | undefined {
-  if (!input) return undefined;
+  if (!input)
+    return undefined;
 
   function parseJsonString(q: string): string | undefined {
     try {
       const v = JSON.parse(q);
-      return typeof v === "string" ? v : undefined;
+      return typeof v === 'string' ? v : undefined;
     } catch {
       return undefined;
     }
@@ -24,7 +59,7 @@ function parseTextSpec(input?: string): TextMatcher | undefined {
 
   // Escape a string for literal use inside a RegExp
   function escapeRegex(s: string): string {
-    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   // Regex literal: /pattern/flags
@@ -47,7 +82,7 @@ function parseTextSpec(input?: string): TextMatcher | undefined {
     if (quoted.startsWith('"') && quoted.endsWith('"')) {
       const decoded = parseJsonString(quoted);
       if (decoded !== undefined) {
-        if (suffix === "s") {
+        if (suffix === 's') {
           // exact, case-sensitive
           return { value: decoded, exact: true };
         } else {
@@ -70,39 +105,45 @@ function parseTextSpec(input?: string): TextMatcher | undefined {
 }
 
 
-function frameRefFromString(sel: string) {
+function frameRefFromString(sel: string): FrameRef {
   const m = sel.match(/^frame\[name="(.+)"\]$/);
-  if (m) return { name: m[1] as string };
+  if (m)
+    return { name: m[1] };
   return { url_contains: sel }; // fallback
 }
 
 
-function framePathToObjects(path?: string[]) {
-  if (!path?.length) return undefined;
+function framePathToObjects(path?: string[]): FrameRef[] | undefined {
+  if (!path?.length)
+    return undefined;
   return path.map(frameRefFromString);
 }
 
 
-function isActionWithSelector(action: any): action is actions.ActionWithSelector {
-  return action && (action as any)?.selector;
+function isActionWithSelector(action: actions.Action): action is ActionWithSelector {
+  return 'selector' in action;
 }
 
 
-function buildStructuredSelector(actionInContext: actions.ActionInContext, debug: Record<string, any> | undefined): any {
-  const selector: Record<string, any> = {};
+function buildStructuredSelector(actionInContext: actions.ActionInContext, debug?: YamlDebugInfo): Selector {
+  const selector: Selector = {};
 
-  const frame = actionInContext.frame
-  if (frame.pageAlias) selector.page = frame.pageAlias;
+  const frame = actionInContext.frame;
+  if (frame.pageAlias)
+    selector.page = frame.pageAlias;
   const framePath = framePathToObjects(frame.framePath);
-  if (framePath) selector.framePath = framePath;
+  if (framePath)
+    selector.framePath = framePath;
 
   const action: actions.Action = actionInContext.action;
   if (isActionWithSelector(action)) {
-    const raw = action.selector;
+    const raw = action.selector ?? undefined;
     const mapped = elementFromParsedSelector(raw, debug);
     selector.element = mapped?.element ?? { css: raw ?? 'UNKNOWN' };
-    if (mapped?.filters) selector.filters = mapped.filters;
-    if (typeof mapped?.nth === 'number') selector.nth = mapped.nth;
+    if (mapped?.filters)
+      selector.filters = mapped.filters;
+    if (typeof mapped?.nth === 'number')
+      selector.nth = mapped.nth;
   }
 
   return selector;
@@ -110,41 +151,48 @@ function buildStructuredSelector(actionInContext: actions.ActionInContext, debug
 
 
 // Simple default stripper
-function stripDefaults<T extends Record<string, any>>(obj: T): T {
-  const out: any = {};
+function stripDefaults<T extends Record<string, unknown>>(obj: T): T {
+  const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(obj)) {
-    if (v == null) continue;
-    if (k === 'modifiers' && v === 0) continue;
-    if (k === 'framePath' && Array.isArray(v) && v.length === 0) continue;
+    if (v === null || v === undefined)
+      continue;
+    if (k === 'modifiers' && v === 0)
+      continue;
+    if (k === 'framePath' && Array.isArray(v) && v.length === 0)
+      continue;
     if (typeof v === 'object' && !Array.isArray(v)) {
-      const nested = stripDefaults(v as any);
-      if (Object.keys(nested).length) out[k] = nested;
-    } else out[k] = v;
+      const nested = stripDefaults(v as Record<string, unknown>);
+      if (Object.keys(nested).length)
+        out[k] = nested;
+    } else { out[k] = v; }
   }
-  return out;
+  return out as T;
 }
 
 
-function stripEmpty<T extends Record<string, any>>(obj: T): Partial<T> {
-  const out: any = {};
+function stripEmpty<T extends Record<string, unknown>>(obj: T): Partial<T> {
+  const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(obj)) {
-    if (v == null) continue;
+    if (v === null || v === undefined)
+      continue;
     if (Array.isArray(v)) {
-      if (v.length) out[k] = v.map(x => (typeof x === 'object' ? stripEmpty(x as any) : x));
+      if (v.length)
+        out[k] = v.map(x => (typeof x === 'object' && x !== null ? stripEmpty(x as Record<string, unknown>) : x));
       continue;
     }
     if (typeof v === 'object') {
-      const nested = stripEmpty(v as any);
-      if (Object.keys(nested).length) out[k] = nested;
+      const nested = stripEmpty(v as Record<string, unknown>);
+      if (Object.keys(nested).length)
+        out[k] = nested;
       continue;
     }
     out[k] = v;
   }
-  return out;
+  return out as Partial<T>;
 }
 
 
-function formatAsYamlListItem(entry: unknown, dumpOpts: any): string {
+function formatAsYamlListItem(entry: unknown, dumpOpts: YAML.DumpOptions): string {
   const dumped = YAML.dump(entry, dumpOpts).replace(/\r\n?/g, '\n');
   const lines = dumped.endsWith('\n') ? dumped.slice(0, -1).split('\n') : dumped.split('\n');
   return lines.map((line, i) => (i === 0 ? `  - ${line}` : `    ${line}`)).join('\n') + '\n';
@@ -152,27 +200,59 @@ function formatAsYamlListItem(entry: unknown, dumpOpts: any): string {
 
 
 // Mask values that look like passwords
-function matchText(t: string | { value: string; regex?: string; exact?: boolean }): boolean {
-  if (typeof t === 'string') return /password|pwd|secret/i.test(t);
-  if (t.value && /password|pwd|secret/i.test(t.value)) return true;
-  if (t.regex && /password|pwd|secret/i.test(t.regex)) return true;
+function matchText(t: TextMatcher): boolean {
+  const rx = /password|pwd|secret/i;
+  if (typeof t === 'string')
+    return rx.test(t);
+  if ('value' in t && typeof t.value === 'string' && rx.test(t.value))
+    return true;
+  if ('pattern' in t && typeof t.pattern === 'string' && rx.test(t.pattern))
+    return true;
   return false;
 }
 
 
-function maybeMaskValue(el: any, text: string | undefined): string | undefined {
-  if (text == null) return text;
+function maybeMaskValue(el: Element | undefined, text: string | undefined): string | undefined {
+  if (!el)
+    return text
+  if (text === null || text === undefined)
+    return text;
 
   // testId or label or placeholder containing "password"/"pwd"/"secret"
-  if ('testId' in el && /password|pwd|secret/i.test(el.testId)) return '${env:ANET_PASSWORD}';
-  if ('label' in el && matchText(el.label)) return '${env:ANET_PASSWORD}';
-  if ('placeholder' in el && matchText(el.placeholder)) return '${env:ANET_PASSWORD}';
-  if ('role' in el && /password|pwd|secret/i.test(el.name ?? '')) return '${env:ANET_PASSWORD}';
-  if ('text' in el && matchText(el.text)) return '${env:ANET_PASSWORD}';
-  if ('css' in el && /password|pwd|secret/i.test(el.css)) return '${env:ANET_PASSWORD}';
-  if ('xpath' in el && /password|pwd|secret/i.test(el.xpath)) return '${env:ANET_PASSWORD}';
+  if ('testId' in el && /password|pwd|secret/i.test(el.testId))
+    return '${env:ANET_PASSWORD}';
+  if ('label' in el && matchText(el.label))
+    return '${env:ANET_PASSWORD}';
+  if ('placeholder' in el && matchText(el.placeholder))
+    return '${env:ANET_PASSWORD}';
+  if ('role' in el && /password|pwd|secret/i.test((el as any).name ?? ''))
+    return '${env:ANET_PASSWORD}';
+  if ('text' in el && matchText(el.text))
+    return '${env:ANET_PASSWORD}';
+  if ('css' in el && /password|pwd|secret/i.test(el.css))
+    return '${env:ANET_PASSWORD}';
+  if ('xpath' in el && /password|pwd|secret/i.test(el.xpath))
+    return '${env:ANET_PASSWORD}';
 
   return text;
+}
+
+
+function decodeModifiers(mask: number | undefined): Modifier[] | undefined {
+  if (!mask)
+    return undefined;
+
+  const result: Modifier[] = [];
+  if (mask & 1)
+    result.push('Alt');
+  if (mask & 2)
+    result.push('Control');
+  if (mask & 4)
+    result.push('Meta');
+  if (mask & 8)
+    result.push('Shift');
+
+  return result.length ? result : undefined;
 }
 
 
@@ -189,13 +269,20 @@ const TRIVIAL_URL_PREFIXES = [
 
 
 function isTrivialUrl(url?: string): boolean {
-  if (!url) return true;
+  if (!url)
+    return true;
   return TRIVIAL_URL_PREFIXES.some(p => url.startsWith(p));
 }
 
+interface ParsedSelectorResult {
+  element: Element;
+  filters?: SelectorFilters;
+  nth?: number;
+}
 
-function elementFromParsedSelector(raw?: string, debug?: Record<string, any>): { element: any; filters?: any; nth?: number } | undefined {
-  if (!raw) return undefined;
+function elementFromParsedSelector(raw?: string, debug?: YamlDebugInfo): ParsedSelectorResult | undefined {
+  if (!raw)
+    return undefined;
 
   let parsed: ReturnType<typeof parseSelector>;
   try {
@@ -203,8 +290,6 @@ function elementFromParsedSelector(raw?: string, debug?: Record<string, any>): {
   } catch {
     return undefined;
   }
-
-  if (debug) debug.parsed_selector = { parsed: parsed };
 
   // Pick the captured part if present (what Playwright intends as the target).
   let baseIndex: number;
@@ -225,8 +310,10 @@ function elementFromParsedSelector(raw?: string, debug?: Record<string, any>): {
     baseIndex = -1;
     for (let i = parsed.parts.length - 1; i >= 0; i--) {
       const name = parsed.parts[i]?.name;
-      if (!name) continue;
-      if (IGNORE_ENGINES.has(name)) continue;
+      if (!name)
+        continue;
+      if (IGNORE_ENGINES.has(name))
+        continue;
       if (!FILTER_ENGINES.has(name)) {
         baseIndex = i;
         break;
@@ -241,25 +328,28 @@ function elementFromParsedSelector(raw?: string, debug?: Record<string, any>): {
 
   // If we still landed on an ignored engine (e.g. captured describe),
   // walk backwards until we hit something real or give up.
-  while (baseIndex >= 0 && IGNORE_ENGINES.has(parsed.parts[baseIndex]?.name)) {
+  while (baseIndex >= 0 && IGNORE_ENGINES.has(parsed.parts[baseIndex]?.name))
     baseIndex--;
-  }
+
   if (baseIndex < 0) {
     // Nothing usable — treat as a raw css-ish selector.
     return { element: { css: raw } };
   }
 
   // Base part (element) comes from baseIndex
-  if (debug) debug.parsed_selector.baseIndex = baseIndex;
-  const basePart = parsed.parts[baseIndex];
-  if (debug) debug.parsed_selector.basePart = basePart;
-
-  // Map basePart onto our structures
-  if (!basePart) {
-    return { element: { css: raw } };
+  let basePart = parsed.parts[baseIndex];
+  if (debug) {
+    const ps = debug.parsed_selector ?? (debug.parsed_selector = { parsed });
+    ps.baseIndex = baseIndex;
+    ps.basePart = basePart;
   }
 
-  const element: Record<string, any> = {};
+  // Map basePart onto our structures
+  if (!basePart)
+    return { element: { css: raw } };
+
+
+  const element: Record<string, unknown> = {};
 
   switch (basePart.name) {
     // case 'internal:and': {}
@@ -286,13 +376,17 @@ function elementFromParsedSelector(raw?: string, debug?: Record<string, any>): {
 
         // Helper: turn attribute into boolean-ish value
         const asBool = (): boolean | undefined => {
-          if (attr.op === '<truthy>') return true;
+          if (attr.op === '<truthy>')
+            return true;
           const v = attr.value;
-          if (typeof v === 'boolean') return v;
+          if (typeof v === 'boolean')
+            return v;
           if (typeof v === 'string') {
             const s = v.toLowerCase();
-            if (s === 'true') return true;
-            if (s === 'false') return false;
+            if (s === 'true')
+              return true;
+            if (s === 'false')
+              return false;
           }
           return undefined;
         };
@@ -306,7 +400,7 @@ function elementFromParsedSelector(raw?: string, debug?: Record<string, any>): {
             if (v instanceof RegExp) {
               // Playwright parsed a real regex for the accessible name.
               matcher = { pattern: v.source, flags: v.flags };
-            } else if (v != null) {
+            } else if (v !== null && v !== undefined) {
               const s = String(v);
               if (attr.caseSensitive) {
                 // Exact, case-sensitive accessible name.
@@ -317,9 +411,9 @@ function elementFromParsedSelector(raw?: string, debug?: Record<string, any>): {
               }
             }
 
-            if (matcher !== undefined) {
+            if (matcher !== undefined)
               (element as any).name = matcher;
-            }
+
             break;
           }
 
@@ -356,8 +450,10 @@ function elementFromParsedSelector(raw?: string, debug?: Record<string, any>): {
 
           default: {
             // Any extra role attributes we don't know about yet
-            if (debug) (debug.parsed_selector.warnings ??= [])
-              .push(`unhandled internal:role attribute [${name}]`);
+            if (debug && debug.parsed_selector) {
+              (debug.parsed_selector.warnings ??= [])
+                .push(`unhandled internal:role attribute [${name}]`);
+            }
             break;
           }
         }
@@ -401,8 +497,10 @@ function elementFromParsedSelector(raw?: string, debug?: Record<string, any>): {
       if (!first) {
         // Fall back to the previous behaviour: stringify the whole selector.
         element.css = stringifySelector(parsed);
-        if (debug) (debug.parsed_selector.warnings ??= [])
-          .push('internal:attr without attributes');
+        if (debug && debug.parsed_selector) {
+          (debug.parsed_selector.warnings ??= [])
+            .push('internal:attr without attributes');
+        }
         break;
       }
 
@@ -412,7 +510,8 @@ function elementFromParsedSelector(raw?: string, debug?: Record<string, any>): {
       // Try to recover the original textual value (`"Text"`, `/re/i`, etc.).
       let rawValueSource: string | undefined;
       const m = body.match(/=\s*(.+)\s*\]$/);
-      if (m) rawValueSource = m[1];
+      if (m)
+        rawValueSource = m[1];
 
       const textMatcher = rawValueSource ? parseTextSpec(rawValueSource) : undefined;
       const value = textMatcher ?? first.value;
@@ -430,8 +529,10 @@ function elementFromParsedSelector(raw?: string, debug?: Record<string, any>): {
         default:
           // Unknown attribute name: degrade gracefully to css selector.
           element.css = stringifySelector(parsed);
-          if (debug) (debug.parsed_selector.warnings ??= [])
-            .push(`unhandled internal:attr attribute [${attrName}]`);
+          if (debug && debug.parsed_selector) {
+            (debug.parsed_selector.warnings ??= [])
+              .push(`unhandled internal:attr attribute [${attrName}]`);
+          }
           break;
       }
       break;
@@ -440,12 +541,13 @@ function elementFromParsedSelector(raw?: string, debug?: Record<string, any>): {
     default: {
       // Unknown engine (internal:has, spatial filters, etc.) — stringify to something stable
       element.css = stringifySelector(parsed);
-      if (debug) (debug.parsed_selector.warnings ??= []).push(`unhandled engine ${basePart.name}`);
+      if (debug && debug.parsed_selector)
+        (debug.parsed_selector.warnings ??= []).push(`unhandled engine ${basePart.name}`);
     }
   }
 
   // Everything after baseIndex are post-filters/position
-  let filters: any | undefined;
+  let filters: Partial<SelectorFilters> | undefined;
   let nth: number | undefined;
   for (const part of parsed.parts.slice(baseIndex + 1)) {
     if (!part || part.name === 'internal:describe')
@@ -473,44 +575,47 @@ function elementFromParsedSelector(raw?: string, debug?: Record<string, any>): {
 
       case 'internal:has': {
         // body is a NestedSelectorBody: { parsed: ParsedSelector, distance?: number }
-        const nestedParsed = (part.body as any)?.parsed;
+        const nestedParsed = (part.body as Record<string, unknown>)?.parsed;
         if (nestedParsed) {
-          const nestedRaw = stringifySelector(nestedParsed);
+          const nestedRaw = stringifySelector(nestedParsed as any);
           const nested = elementFromParsedSelector(nestedRaw);
-          if (nested) {
+          if (nested)
             (filters ??= {}).has = nested;
-          }
+
         }
         break;
       }
 
       case 'internal:has-not': {
-        const nestedParsed = (part.body as any)?.parsed;
+        const nestedParsed = (part.body as Record<string, unknown>)?.parsed;
         if (nestedParsed) {
-          const nestedRaw = stringifySelector(nestedParsed);
+          const nestedRaw = stringifySelector(nestedParsed as any);
           const nested = elementFromParsedSelector(nestedRaw);
-          if (nested) {
+          if (nested)
             (filters ??= {}).hasNot = nested;
-          }
+
         }
         break;
       }
 
       case 'nth': {
         const n = parseInt(String(part.body ?? ''), 10);
-        if (Number.isFinite(n)) nth = n;
+        if (Number.isFinite(n))
+          nth = n;
         break;
       }
 
       default: {
-        if (debug) (debug.parsed_selector.warnings ??= [])
-          .push(`unhandled parsed attribute part ${part?.name}`);
+        if (debug && debug.parsed_selector) {
+          (debug.parsed_selector.warnings ??= [])
+            .push(`unhandled parsed attribute part ${part?.name}`);
+        }
         break;
       }
     }
   }
 
-  return { element, filters, nth }
+  return { element: element as Element, filters, nth };
 }
 
 
@@ -519,21 +624,15 @@ type UrlHint =
   | { url_contains: string };
 
 
-type Expectation =
-  | ({ expect: "navigation" } & Partial<UrlHint>)
-  | { expect: "popup"; pageAlias?: string }
-  | { expect: "download" }
-  | { expect: "dialog"; type?: "alert" | "beforeunload" | "confirm" | "prompt" }; // extend if you record message/accepted
-
-
 function expectFromSignals(action: actions.Action): Expectation[] | undefined {
 
   function toUrlHint(url?: string): UrlHint | undefined {
-    if (!url) return undefined;
+    if (!url)
+      return undefined;
     try {
       const u = new URL(url);
       // exact for absolute http(s), contains otherwise
-      return u.protocol === "http:" || u.protocol === "https:"
+      return u.protocol === 'http:' || u.protocol === 'https:'
         ? { url_exact: url }
         : { url_contains: url };
     } catch {
@@ -542,34 +641,30 @@ function expectFromSignals(action: actions.Action): Expectation[] | undefined {
   }
 
   const signals = action?.signals;
-  if (!Array.isArray(signals) || signals.length === 0) return undefined;
+  if (!Array.isArray(signals) || signals.length === 0)
+    return undefined;
 
   const expectations: Expectation[] = [];
 
   for (const signal of signals as actions.Signal[]) {
     switch (signal.name) {
-      case "navigation": {
+      case 'navigation': {
         const hint = toUrlHint(signal.url);
         expectations.push(
-          hint ? { expect: "navigation", ...hint } : { expect: "navigation" }
+          hint ? { expect: 'navigation', ...hint } : { expect: 'navigation' }
         );
         break;
       }
-      case "popup": {
-        expectations.push({ expect: "popup", pageAlias: signal.popupAlias });
+      case 'popup': {
+        expectations.push({ expect: 'popup', pageAlias: signal.popupAlias });
         break;
       }
-      case "download": {
-        expectations.push({ expect: "download" });
+      case 'download': {
+        expectations.push({ expect: 'download' });
         break;
       }
       case 'dialog': {
-        const s: any = signal;
-        const exp: any = { expect: 'dialog' };
-        if (s.dialogType) exp.type = s.dialogType;
-        if (s.message) exp.message = s.message;
-        if (typeof s.accepted === 'boolean') exp.accepted = s.accepted;
-        expectations.push(exp);
+        expectations.push({ expect: 'dialog' });
         break;
       }
       default:
@@ -598,7 +693,8 @@ export class YamlLanguageGenerator implements LanguageGenerator {
   private _debug = false;
 
   private _emitHeaderOnce(): string[] {
-    if (this._headerEmitted) return [];
+    if (this._headerEmitted)
+      return [];
     this._headerEmitted = true;
 
     // Dump only the meta (no steps), then add "steps:"; from now on we'll append list items.
@@ -614,25 +710,27 @@ export class YamlLanguageGenerator implements LanguageGenerator {
 
   generateHeader(options: LanguageGeneratorOptions): string {
     // Little hack to turn on debug info in the generated yaml
-    if (process.env.GENFEST_HTML_DIR) this._debug = true;
+    if (process.env.GENFEST_HTML_DIR)
+      this._debug = true;
 
     // Derive defaults early so header can include them.
     this._seedUrl = options?.contextOptions?.baseURL || undefined;
     this._meta.name = (this._seedUrl ? new URL(this._seedUrl).hostname : 'Recorded Scenario');
     this._meta.baseURL = options?.contextOptions?.baseURL || this._seedUrl;
     this._headerEmitted = false;
-    return '# Generated by Genfest'
+    return '# Generated by Genfest';
   }
 
   generateAction(actionInContext: actions.ActionInContext): string {
     const out: string[] = [];
 
-    let debug: Record<string, any> | undefined = undefined;
-    if (this._debug) debug = { action_in_context: actionInContext };
+    let debug: YamlDebugInfo | undefined = undefined;
+    if (this._debug)
+      debug = { action_in_context: actionInContext };
 
     const selector = buildStructuredSelector(actionInContext, debug);
 
-    const step: Record<string, any> = {};
+    const step: Record<string, unknown> = {};
 
     const action = actionInContext.action;
     switch (action.name) {
@@ -643,10 +741,13 @@ export class YamlLanguageGenerator implements LanguageGenerator {
       case 'navigate': {
         const url = action.url;
         // Skip trivial URLs
-        if (isTrivialUrl(url)) return out.join('\n');
+        if (isTrivialUrl(url))
+          return out.join('\n');
 
-        if (!this._meta.baseURL) this._meta.baseURL = url;
-        if (!this._headerEmitted) out.push(...this._emitHeaderOnce());
+        if (!this._meta.baseURL)
+          this._meta.baseURL = url;
+        if (!this._headerEmitted)
+          out.push(...this._emitHeaderOnce());
 
         step.action = 'navigate';
         step.url = url;
@@ -657,14 +758,13 @@ export class YamlLanguageGenerator implements LanguageGenerator {
       case 'click': {
         if (action.clickCount === 2) {
           step.action = 'dblclick';
-          step.button = action.button;
-          step.modifiers = action.modifiers;
         } else {
           step.action = 'click';
-          step.button = action.button;
-          step.modifiers = action.modifiers;
-          if (action.clickCount !== 1) step.clickCount = action.clickCount;
+          if (action.clickCount !== 1)
+            step.clickCount = action.clickCount;
         }
+        step.button = action.button;
+        step.modifiers = decodeModifiers(action.modifiers);
         step.expectations = expectFromSignals(action);
         break;
       }
@@ -681,7 +781,7 @@ export class YamlLanguageGenerator implements LanguageGenerator {
       case 'press': {
         step.action = 'press';
         step.key = action.key;
-        step.modifiers = action.modifiers;
+        step.modifiers = decodeModifiers(action.modifiers);
         step.expectations = expectFromSignals(action);
         break;
       }
@@ -717,9 +817,9 @@ export class YamlLanguageGenerator implements LanguageGenerator {
       // --- assertVisible -----------------------------------------
       case 'assertVisible': {
         step.action = 'assert.visible';
-        if ((action as any).isNot) {
+        if ((action as any).isNot)
           step.visible = false;
-        }
+
         break;
       }
 
@@ -739,19 +839,8 @@ export class YamlLanguageGenerator implements LanguageGenerator {
       // --- select ------------------------------------------------
       case 'select': {
         step.action = 'select';
-        step.options = (action.options || []).map((opt: any) => {
-          if (typeof opt === 'string') {
-            // Default PW semantics: string -> value
-            return { value: opt };
-          }
-          if (typeof opt === 'object') {
-            if (opt.label != null) return { label: opt.label };
-            if (opt.value != null) return { value: opt.value };
-            if (opt.index != null) return { index: opt.index };
-          }
-          // Last-resort: stringify to value
-          return { value: String(opt) };
-        });
+        // Playwright's SelectAction always provides options as string[]
+        step.options = action.options.map(opt => ({ value: opt }));
         step.expectations = expectFromSignals(action);
         break;
       }
@@ -759,21 +848,23 @@ export class YamlLanguageGenerator implements LanguageGenerator {
       // --- setInputFiles -----------------------------------------
       // --- assertSnapshot ----------------------------------------
       default: {
-        step.action = action.name + " (NOT SUPPORTED)"
-        if (!this._debug) step.debug = { action_in_context: actionInContext };
+        step.action = action.name + ' (NOT SUPPORTED)';
+        if (!this._debug)
+          step.debug = { action_in_context: actionInContext };
         break;
       }
     }
 
     step.selector = selector;
-    if (this._debug) step.debug = debug;
+    if (this._debug)
+      step.debug = debug;
 
     out.push(formatAsYamlListItem(stripDefaults(step), this._dumpOpts));
     return out.join('\n');
   }
 
   // Nothing to flush at the end; the document was streamed.
-  generateFooter(saveStorage: string | undefined): string {
+  generateFooter(_saveStorage: string | undefined): string {
     return '';
   }
 }
