@@ -744,13 +744,38 @@ export class YamlLanguageGenerator implements LanguageGenerator {
         if (isTrivialUrl(url))
           return out.join('\n');
 
-        if (!this._meta.baseURL)
-          this._meta.baseURL = url;
+        // Extract origin as baseURL from first non-trivial URL
+        if (!this._meta.baseURL) {
+          try {
+            this._meta.baseURL = new URL(url).origin;
+          } catch {
+            // If URL parsing fails, use the full URL as fallback
+            this._meta.baseURL = url;
+          }
+        }
         if (!this._headerEmitted)
           out.push(...this._emitHeaderOnce());
 
         step.action = 'navigate';
-        step.url = url;
+
+        // Make URL relative if it shares the same origin as baseURL
+        let outputUrl = url;
+        if (this._meta.baseURL && url) {
+          try {
+            const baseUrl = new URL(this._meta.baseURL);
+            const targetUrl = new URL(url);
+
+            // If same origin (protocol + host + port), make it relative
+            if (baseUrl.origin === targetUrl.origin) {
+              outputUrl = targetUrl.pathname + targetUrl.search + targetUrl.hash;
+            }
+          } catch {
+            // If URL parsing fails, keep the original URL
+            outputUrl = url;
+          }
+        }
+
+        step.url = outputUrl;
         break;
       }
 
