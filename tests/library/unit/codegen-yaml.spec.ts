@@ -15,17 +15,14 @@
  */
 
 import { test, expect } from '@playwright/test';
-import { YamlLanguageGenerator } from '../../../packages/playwright-core/src/server/codegen/yaml';
+import { YamlLanguageGenerator, YAML_DUMP_OPTIONS } from '../../../packages/playwright-core/src/server/codegen/yaml';
 import type * as actions from '@recorder/actions';
 import type { LanguageGeneratorOptions } from '../../../packages/playwright-core/src/server/codegen/types';
 import * as YAML from 'js-yaml';
 
-// Use the same YAML dump options as yaml.ts to ensure consistent formatting
-const dumpOpts = { noRefs: true, lineWidth: 120, forceQuotes: true };
-
 // Helper to format a value as YAML would format it (for robust test assertions)
 function formatYaml(obj: unknown): string {
-  return YAML.dump(obj, dumpOpts).replace(/\r\n?/g, '\n').trim();
+  return YAML.dump(obj, YAML_DUMP_OPTIONS).replace(/\r\n?/g, '\n').trim();
 }
 
 // Helper to create a basic ActionInContext
@@ -75,8 +72,11 @@ test.describe('YamlLanguageGenerator', () => {
     generator.generateHeader(createOptions());
     const result = generator.generateAction(createAction(action));
 
-    expect(result).toContain("action: 'navigate'");
-    expect(result).toContain("url: 'https://example.com/page'");
+    expect(result).toContain(formatYaml({ action: 'navigate' }));
+    // URL is now relative after baseURL extraction
+    expect(result).toContain(formatYaml({ url: '/page' }));
+    // And baseURL is extracted
+    expect(result).toContain(formatYaml({ baseURL: 'https://example.com' }));
   });
 
   test('should skip about:blank navigation', () => {
@@ -106,7 +106,7 @@ test.describe('YamlLanguageGenerator', () => {
     generator.generateHeader(createOptions());
     const result = generator.generateAction(createAction(action));
 
-    expect(result).toContain("action: 'click'");
+    expect(result).toContain(formatYaml({ action: "click" }));
   });
 
   test('should generate dblclick action', () => {
@@ -123,7 +123,7 @@ test.describe('YamlLanguageGenerator', () => {
     generator.generateHeader(createOptions());
     const result = generator.generateAction(createAction(action));
 
-    expect(result).toContain("action: 'dblclick'");
+    expect(result).toContain(formatYaml({ action: "dblclick" }));
   });
 
   test('should generate right-click action', () => {
@@ -140,7 +140,7 @@ test.describe('YamlLanguageGenerator', () => {
     generator.generateHeader(createOptions());
     const result = generator.generateAction(createAction(action));
 
-    expect(result).toContain("button: 'right'");
+    expect(result).toContain(formatYaml({ button: "right" }));
   });
 
   test('should generate fill action', () => {
@@ -154,8 +154,8 @@ test.describe('YamlLanguageGenerator', () => {
     generator.generateHeader(createOptions());
     const result = generator.generateAction(createAction(action));
 
-    expect(result).toContain("action: 'fill'");
-    expect(result).toContain("text: 'test value'");
+    expect(result).toContain(formatYaml({ action: "fill" }));
+    expect(result).toContain(formatYaml({ text: "test value" }));
   });
 
   test('should mask password fields based on CSS selector', () => {
@@ -186,8 +186,8 @@ test.describe('YamlLanguageGenerator', () => {
     generator.generateHeader(createOptions());
     const result = generator.generateAction(createAction(action));
 
-    expect(result).toContain("action: 'press'");
-    expect(result).toContain("key: 'Enter'");
+    expect(result).toContain(formatYaml({ action: "press" }));
+    expect(result).toContain(formatYaml({ key: "Enter" }));
   });
 
   test('should generate check action', () => {
@@ -200,7 +200,7 @@ test.describe('YamlLanguageGenerator', () => {
     generator.generateHeader(createOptions());
     const result = generator.generateAction(createAction(action));
 
-    expect(result).toContain("action: 'check'");
+    expect(result).toContain(formatYaml({ action: "check" }));
   });
 
   test('should generate uncheck action', () => {
@@ -213,7 +213,7 @@ test.describe('YamlLanguageGenerator', () => {
     generator.generateHeader(createOptions());
     const result = generator.generateAction(createAction(action));
 
-    expect(result).toContain("action: 'uncheck'");
+    expect(result).toContain(formatYaml({ action: "uncheck" }));
   });
 
   test('should generate select action with value', () => {
@@ -227,8 +227,8 @@ test.describe('YamlLanguageGenerator', () => {
     generator.generateHeader(createOptions());
     const result = generator.generateAction(createAction(action));
 
-    expect(result).toContain("action: 'select'");
-    expect(result).toContain("value: 'value1'");
+    expect(result).toContain(formatYaml({ action: "select" }));
+    expect(result).toContain(formatYaml({ value: "value1" }));
   });
 
   test('should generate select action with multiple values', () => {
@@ -242,9 +242,9 @@ test.describe('YamlLanguageGenerator', () => {
     generator.generateHeader(createOptions());
     const result = generator.generateAction(createAction(action));
 
-    expect(result).toContain("action: 'select'");
-    expect(result).toContain("value: 'value1'");
-    expect(result).toContain("value: 'value2'");
+    expect(result).toContain(formatYaml({ action: "select" }));
+    expect(result).toContain(formatYaml({ value: "value1" }));
+    expect(result).toContain(formatYaml({ value: "value2" }));
   });
 
   test('should generate assertText action', () => {
@@ -259,8 +259,8 @@ test.describe('YamlLanguageGenerator', () => {
     generator.generateHeader(createOptions());
     const result = generator.generateAction(createAction(action));
 
-    expect(result).toContain("action: 'assert.text'");
-    expect(result).toContain("text: 'expected text'");
+    expect(result).toContain(formatYaml({ action: "assert.text" }));
+    expect(result).toContain(formatYaml({ text: "expected text" }));
   });
 
   test('should generate assertValue action', () => {
@@ -274,8 +274,8 @@ test.describe('YamlLanguageGenerator', () => {
     generator.generateHeader(createOptions());
     const result = generator.generateAction(createAction(action));
 
-    expect(result).toContain("action: 'assert.value'");
-    expect(result).toContain("value: 'expected value'");
+    expect(result).toContain(formatYaml({ action: "assert.value" }));
+    expect(result).toContain(formatYaml({ value: "expected value" }));
   });
 
   test('should generate assertChecked action', () => {
@@ -289,7 +289,7 @@ test.describe('YamlLanguageGenerator', () => {
     generator.generateHeader(createOptions());
     const result = generator.generateAction(createAction(action));
 
-    expect(result).toContain("action: 'assert.checked'");
+    expect(result).toContain(formatYaml({ action: "assert.checked" }));
     expect(result).toContain('checked: true');
   });
 
@@ -303,7 +303,7 @@ test.describe('YamlLanguageGenerator', () => {
     generator.generateHeader(createOptions());
     const result = generator.generateAction(createAction(action));
 
-    expect(result).toContain("action: 'assert.visible'");
+    expect(result).toContain(formatYaml({ action: "assert.visible" }));
   });
 
   test('should generate closePage action', () => {
@@ -315,7 +315,7 @@ test.describe('YamlLanguageGenerator', () => {
     generator.generateHeader(createOptions());
     const result = generator.generateAction(createAction(action));
 
-    expect(result).toContain("action: 'closePage'");
+    expect(result).toContain(formatYaml({ action: "closePage" }));
   });
 
   test('should handle frame paths', () => {
@@ -356,7 +356,7 @@ test.describe('YamlLanguageGenerator', () => {
     generator.generateHeader(createOptions());
     const result = generator.generateAction(createAction(action));
 
-    expect(result).toContain("action: 'fill'");
+    expect(result).toContain(formatYaml({ action: "fill" }));
     // YAML should handle special characters correctly
     expect(result).toContain('text:');
   });
@@ -372,7 +372,71 @@ test.describe('YamlLanguageGenerator', () => {
     const result = generator.generateAction(createAction(action));
 
     // YAML.dump uses single quotes by default
-    expect(result).toContain("action: 'navigate'");
-    expect(result).toContain("url: 'https://example.com'");
+    expect(result).toContain(formatYaml({ action: "navigate" }));
+    // URL is now relative (just '/') after baseURL extraction
+    expect(result).toContain(formatYaml({ url: "/" }));
+    // And baseURL is extracted as origin
+    expect(result).toContain(formatYaml({ baseURL: "https://example.com" }));
+  });
+
+  test('should generate selector with hasText filter', () => {
+    // Corresponds to user writing: locator('div').filter({ hasText: 'Hello' })
+    // Internal selector: div >> internal:has-text="Hello"
+    const action: actions.ClickAction = {
+      name: 'click',
+      selector: 'div >> internal:has-text="Hello"',
+      signals: [],
+      button: 'left',
+      modifiers: 0,
+      clickCount: 1,
+      position: undefined,
+    };
+
+    generator.generateHeader(createOptions());
+    const result = generator.generateAction(createAction(action));
+
+    // Expected YAML structure:
+    // selector:
+    //   element:
+    //     css: 'div'
+    //   filters:
+    //     hasText: 'Hello'
+
+    expect(result).toContain(formatYaml({ action: "click" }));
+    expect(result).toContain(formatYaml({ css: "div" }));
+    expect(result).toContain("filters:");
+    expect(result).toContain(formatYaml({ hasText: "Hello" }));
+  });
+
+  test('should generate selector with nested has filter', () => {
+    // Corresponds to user writing: locator('article').filter({ has: locator('button') })
+    // Internal selector: article >> internal:has="button"
+    const action: actions.ClickAction = {
+      name: 'click',
+      selector: 'article >> internal:has="button"',
+      signals: [],
+      button: 'left',
+      modifiers: 0,
+      clickCount: 1,
+      position: undefined,
+    };
+
+    generator.generateHeader(createOptions());
+    const result = generator.generateAction(createAction(action));
+
+    // Expected YAML structure:
+    // selector:
+    //   element:
+    //     css: 'article'
+    //   filters:
+    //     has:
+    //       element:
+    //         css: 'button'
+
+    expect(result).toContain(formatYaml({ css: "article" }));
+    expect(result).toContain("filters:");
+    expect(result).toContain("has:");
+    // The nested element
+    expect(result).toContain(formatYaml({ css: "button" }));
   });
 });
