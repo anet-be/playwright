@@ -31,6 +31,7 @@ import { Frame } from './frames';
 import { Page } from './page';
 import { performAction } from './recorder/recorderRunner';
 
+import { scheduleDumpFrameTree } from './utils/debugDumpHtml';
 import type { Language } from './codegen/types';
 import type { CallMetadata, InstrumentationListener, SdkObject } from './instrumentation';
 import type { Point } from '../utils/isomorphic/types';
@@ -39,7 +40,6 @@ import type * as channels from '@protocol/channels';
 import type * as actions from '@recorder/actions';
 import type { CallLog, CallLogStatus, ElementInfo, Mode, OverlayState, Source, UIState } from '@recorder/recorderTypes';
 import type { RegisteredListener } from '../utils';
-import { scheduleDumpFrameTree } from './utils/debugDumpHtml';
 
 const recorderSymbol = Symbol('recorderSymbol');
 
