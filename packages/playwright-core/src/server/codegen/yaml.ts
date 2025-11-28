@@ -227,19 +227,19 @@ function maybeMaskValue(el: Element | undefined, text: string | undefined): stri
 
   // testId or label or placeholder containing "password"/"pwd"/"secret"
   if ('testId' in el && /password|pwd|secret/i.test(el.testId))
-    return '${env:ANET_PASSWORD}';
+    return '${env:PASSWORD}';
   if ('label' in el && matchText(el.label))
-    return '${env:ANET_PASSWORD}';
+    return '${env:PASSWORD}';
   if ('placeholder' in el && matchText(el.placeholder))
-    return '${env:ANET_PASSWORD}';
+    return '${env:PASSWORD}';
   if ('role' in el && /password|pwd|secret/i.test((el as any).name ?? ''))
-    return '${env:ANET_PASSWORD}';
+    return '${env:PASSWORD}';
   if ('text' in el && matchText(el.text))
-    return '${env:ANET_PASSWORD}';
+    return '${env:PASSWORD}';
   if ('css' in el && /password|pwd|secret/i.test(el.css))
-    return '${env:ANET_PASSWORD}';
+    return '${env:PASSWORD}';
   if ('xpath' in el && /password|pwd|secret/i.test(el.xpath))
-    return '${env:ANET_PASSWORD}';
+    return '${env:PASSWORD}';
 
   return text;
 }
