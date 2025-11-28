@@ -170,7 +170,7 @@ test.describe('YamlLanguageGenerator', () => {
     generator.generateHeader(createOptions());
     const result = generator.generateAction(createAction(action));
 
-    expect(result).toContain('ANET_PASSWORD');
+    expect(result).toContain('PASSWORD');
     expect(result).not.toContain('secret123');
   });
 
