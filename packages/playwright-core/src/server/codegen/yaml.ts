@@ -27,6 +27,13 @@ import type {
   TextMatcher,
 } from './yamlTypes';
 
+// Export YAML dump options for consistency between generator and tests
+export const YAML_DUMP_OPTIONS: YAML.DumpOptions = {
+  noRefs: true,
+  lineWidth: 120,
+  forceQuotes: true,
+  quotingType: '"',
+};
 
 type ActionWithSelector = actions.Action & { selector?: string | null };
 
@@ -683,7 +690,7 @@ export class YamlLanguageGenerator implements LanguageGenerator {
   name = 'YAML';
   highlighter = 'javascript' as Language;
 
-  private _dumpOpts = { noRefs: true, lineWidth: 120, forceQuotes: true };
+  private _dumpOpts = YAML_DUMP_OPTIONS;
   private _headerEmitted = false;
   private _seedUrl: string | undefined;
   private _meta: { version: string; name: string; baseURL?: string } = {
