@@ -53,6 +53,21 @@ const MODIFIER_CONTROL = 2;
 const MODIFIER_META = 4;
 const MODIFIER_SHIFT = 8;
 
+// Schema defaults (from genfest scenario.schema.json)
+// These values are omitted from generated YAML when they match defaults
+// Structured as nested mapping to match the step/selector structure
+const SCHEMA_DEFAULTS: Record<string, any> = {
+  // Step-level defaults
+  button: 'left',         // Click button default
+  clickCount: 1,          // Single click default
+  modifiers: [],          // No modifiers by default
+
+  // Selector-level defaults (nested)
+  selector: {
+    page: 'page',         // Default page selector
+  },
+};
+
 type ActionWithSelector = actions.Action & { selector?: string | null };
 
 
@@ -176,21 +191,60 @@ function buildStructuredSelector(actionInContext: actions.ActionInContext, debug
 
 
 // Simple default stripper
-function stripDefaults<T extends Record<string, unknown>>(obj: T): T {
+/**
+ * Recursively strip default values from an object based on SCHEMA_DEFAULTS mapping.
+ * @param obj - The object to strip defaults from
+ * @param defaults - The defaults mapping at the current nesting level (defaults to root SCHEMA_DEFAULTS)
+ * @returns A new object with default values removed
+ */
+function stripDefaults<T extends Record<string, unknown>>(
+  obj: T,
+  defaults: Record<string, any> = SCHEMA_DEFAULTS
+): T {
   const out: Record<string, unknown> = {};
+
   for (const [k, v] of Object.entries(obj)) {
+    // Skip null/undefined
     if (v === null || v === undefined)
       continue;
+
+    // Check if this key has a default value
+    if (k in defaults) {
+      const defaultValue = defaults[k];
+
+      // Skip if value matches default
+      if (v === defaultValue)
+        continue;
+
+      // Skip empty arrays if default is empty array
+      if (Array.isArray(defaultValue) && defaultValue.length === 0 &&
+          Array.isArray(v) && v.length === 0)
+        continue;
+    }
+
+    // Special case: modifiers numeric value (legacy support)
     if (k === 'modifiers' && v === 0)
       continue;
+
+    // Special case: empty framePath arrays
     if (k === 'framePath' && Array.isArray(v) && v.length === 0)
       continue;
+
+    // Handle nested objects: recurse with the nested defaults map
     if (typeof v === 'object' && !Array.isArray(v)) {
-      const nested = stripDefaults(v as Record<string, unknown>);
+      // Get nested defaults for this key, or use empty object if none
+      const nestedDefaults = (k in defaults && typeof defaults[k] === 'object' && !Array.isArray(defaults[k]))
+        ? defaults[k]
+        : {};
+      const nested = stripDefaults(v as Record<string, unknown>, nestedDefaults);
       if (Object.keys(nested).length)
         out[k] = nested;
-    } else { out[k] = v; }
+    } else {
+      // Keep non-default values
+      out[k] = v;
+    }
   }
+
   return out as T;
 }
 

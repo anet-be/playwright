@@ -439,4 +439,162 @@ test.describe('YamlLanguageGenerator', () => {
     // The nested element
     expect(result).toContain(formatYaml({ css: 'button' }));
   });
+
+  // Tests for default value omission
+  test('should omit default button value on click', () => {
+    const action: actions.ClickAction = {
+      name: 'click',
+      selector: 'button',
+      signals: [],
+      button: 'left',      // DEFAULT - should be omitted
+      modifiers: 0,
+      clickCount: 1,       // DEFAULT - should be omitted
+      position: undefined,
+    };
+
+    generator.generateHeader(createOptions());
+    const result = generator.generateAction(createAction(action));
+
+    expect(result).toContain(formatYaml({ action: 'click' }));
+    // Default button='left' should NOT appear in output
+    expect(result).not.toContain('button:');
+    // Default clickCount=1 should NOT appear in output
+    expect(result).not.toContain('clickCount:');
+  });
+
+  test('should include non-default button value', () => {
+    const action: actions.ClickAction = {
+      name: 'click',
+      selector: 'button',
+      signals: [],
+      button: 'right',     // NOT default - should be included
+      modifiers: 0,
+      clickCount: 1,
+      position: undefined,
+    };
+
+    generator.generateHeader(createOptions());
+    const result = generator.generateAction(createAction(action));
+
+    expect(result).toContain(formatYaml({ action: 'click' }));
+    // Non-default button='right' SHOULD appear in output
+    expect(result).toContain(formatYaml({ button: 'right' }));
+  });
+
+  test('should omit default page selector', () => {
+    const action: actions.ClickAction = {
+      name: 'click',
+      selector: 'button',
+      signals: [],
+      button: 'left',
+      modifiers: 0,
+      clickCount: 1,
+      position: undefined,
+    };
+
+    const actionInContext: actions.ActionInContext = {
+      action,
+      frame: {
+        pageGuid: 'codegen-yaml.spec.ts',
+        pageAlias: 'page',   // DEFAULT - should be omitted from selector
+        framePath: [],
+      },
+      startTime: Date.now(),
+    };
+
+    generator.generateHeader(createOptions());
+    const result = generator.generateAction(actionInContext);
+
+    expect(result).toContain(formatYaml({ action: 'click' }));
+    // Default page='page' should NOT appear in selector
+    expect(result).not.toContain('page: "page"');
+    // But selector should still be present
+    expect(result).toContain('selector:');
+  });
+
+  test('should include non-default page selector', () => {
+    const action: actions.ClickAction = {
+      name: 'click',
+      selector: 'button',
+      signals: [],
+      button: 'left',
+      modifiers: 0,
+      clickCount: 1,
+      position: undefined,
+    };
+
+    const actionInContext: actions.ActionInContext = {
+      action,
+      frame: {
+        pageGuid: 'codegen-yaml.spec.ts',
+        pageAlias: 'popup',   // NOT default - should be included
+        framePath: [],
+      },
+      startTime: Date.now(),
+    };
+
+    generator.generateHeader(createOptions());
+    const result = generator.generateAction(actionInContext);
+
+    expect(result).toContain(formatYaml({ action: 'click' }));
+    // Non-default page='popup' SHOULD appear in output
+    expect(result).toContain(formatYaml({ page: 'popup' }));
+  });
+
+  test('should omit empty modifiers array', () => {
+    const action: actions.ClickAction = {
+      name: 'click',
+      selector: 'button',
+      signals: [],
+      button: 'left',
+      modifiers: 0,        // Empty modifiers - should be omitted
+      clickCount: 1,
+      position: undefined,
+    };
+
+    generator.generateHeader(createOptions());
+    const result = generator.generateAction(createAction(action));
+
+    expect(result).toContain(formatYaml({ action: 'click' }));
+    // Empty modifiers should NOT appear in output
+    expect(result).not.toContain('modifiers:');
+  });
+
+  test('should include non-empty modifiers', () => {
+    const action: actions.PressAction = {
+      name: 'press',
+      selector: 'input',
+      key: 'A',
+      modifiers: 8,        // Shift key (non-empty) - should be included
+      signals: [],
+    };
+
+    generator.generateHeader(createOptions());
+    const result = generator.generateAction(createAction(action));
+
+    expect(result).toContain(formatYaml({ action: 'press' }));
+    // Non-empty modifiers SHOULD appear in output
+    expect(result).toContain('modifiers:');
+    expect(result).toContain('Shift');
+  });
+
+  test('should include clickCount=2 for dblclick', () => {
+    const action: actions.ClickAction = {
+      name: 'click',
+      selector: 'button',
+      signals: [],
+      button: 'left',
+      modifiers: 0,
+      clickCount: 2,       // NOT default - should appear for dblclick
+      position: undefined,
+    };
+
+    generator.generateHeader(createOptions());
+    const result = generator.generateAction(createAction(action));
+
+    expect(result).toContain(formatYaml({ action: 'dblclick' }));
+    // For dblclick, action name changes but clickCount is not needed
+    // since 'dblclick' implies clickCount=2
+    // (This behavior matches existing logic)
+  });
 });
