@@ -146,10 +146,18 @@ function parseTextSpec(input?: string): TextMatcher | undefined {
 
 
 function frameRefFromString(sel: string): FrameRef {
-  const m = sel.match(/^frame\[name="(.+)"\]$/);
-  if (m)
-    return { name: m[1] };
-  return { url_contains: sel }; // fallback
+  // Match iframe[name="..."] pattern (from recorderUtils fallback)
+  const iframeNameMatch = sel.match(/^iframe\[name="(.+)"\]$/);
+  if (iframeNameMatch)
+    return { name: iframeNameMatch[1] };
+
+  // Match iframe[src="..."] pattern (from recorderUtils fallback)
+  const iframeSrcMatch = sel.match(/^iframe\[src="(.+)"\]$/);
+  if (iframeSrcMatch)
+    return { url_exact: iframeSrcMatch[1] };
+
+  // Anything else is a CSS selector from generateSelectorSimple
+  return { css: sel };
 }
 
 
