@@ -62,7 +62,8 @@ export type FrameRef =
   | { name: string; kind?: 'auto' | 'iframe' | 'frame' | 'object' }
   | { url_exact: string; kind?: 'auto' | 'iframe' | 'frame' | 'object' }
   | { url_contains: string; kind?: 'auto' | 'iframe' | 'frame' | 'object' }
-  | { index: number; kind?: 'auto' | 'iframe' | 'frame' | 'object' };
+  | { index: number; kind?: 'auto' | 'iframe' | 'frame' | 'object' }
+  | { css: string; kind?: 'auto' | 'iframe' | 'frame' | 'object' };
 
 // Selector filters (schema line 408-428)
 export interface SelectorFilters {

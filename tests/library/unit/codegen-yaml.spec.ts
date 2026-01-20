@@ -345,6 +345,96 @@ test.describe('YamlLanguageGenerator', () => {
     expect(result).toContain('framePath:');
   });
 
+  test('should parse iframe[name="..."] as frame reference with name', () => {
+    const action: actions.ClickAction = {
+      name: 'click',
+      selector: 'button',
+      signals: [],
+      button: 'left',
+      modifiers: 0,
+      clickCount: 1,
+      position: undefined,
+    };
+
+    const actionInContext: actions.ActionInContext = {
+      action,
+      frame: {
+        pageGuid: 'codegen-yaml.spec.ts',
+        pageAlias: 'page',
+        framePath: ['iframe[name="service"]'],
+      },
+      startTime: Date.now(),
+    };
+
+    generator.generateHeader(createOptions());
+    const result = generator.generateAction(actionInContext);
+
+    expect(result).toContain('framePath:');
+    // The framePath should contain name: service (not url_contains or css)
+    expect(result).toContain(formatYaml({ name: 'service' }));
+    expect(result).not.toContain('url_contains');
+  });
+
+  test('should parse CSS ID selector as frame reference with css', () => {
+    const action: actions.ClickAction = {
+      name: 'click',
+      selector: 'button',
+      signals: [],
+      button: 'left',
+      modifiers: 0,
+      clickCount: 1,
+      position: undefined,
+    };
+
+    const actionInContext: actions.ActionInContext = {
+      action,
+      frame: {
+        pageGuid: 'codegen-yaml.spec.ts',
+        pageAlias: 'page',
+        framePath: ['#service'],
+      },
+      startTime: Date.now(),
+    };
+
+    generator.generateHeader(createOptions());
+    const result = generator.generateAction(actionInContext);
+
+    expect(result).toContain('framePath:');
+    // The framePath should contain css: #service (not url_contains)
+    expect(result).toContain(formatYaml({ css: '#service' }));
+    expect(result).not.toContain('url_contains');
+  });
+
+  test('should parse iframe[src="..."] as frame reference with url_exact', () => {
+    const action: actions.ClickAction = {
+      name: 'click',
+      selector: 'button',
+      signals: [],
+      button: 'left',
+      modifiers: 0,
+      clickCount: 1,
+      position: undefined,
+    };
+
+    const actionInContext: actions.ActionInContext = {
+      action,
+      frame: {
+        pageGuid: 'codegen-yaml.spec.ts',
+        pageAlias: 'page',
+        framePath: ['iframe[src="https://example.com/frame"]'],
+      },
+      startTime: Date.now(),
+    };
+
+    generator.generateHeader(createOptions());
+    const result = generator.generateAction(actionInContext);
+
+    expect(result).toContain('framePath:');
+    // The framePath should contain url_exact (not url_contains)
+    expect(result).toContain(formatYaml({ url_exact: 'https://example.com/frame' }));
+    expect(result).not.toContain('url_contains');
+  });
+
   test('should handle special characters in text', () => {
     const action: actions.FillAction = {
       name: 'fill',
