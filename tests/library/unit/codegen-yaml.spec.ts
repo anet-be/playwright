@@ -143,6 +143,28 @@ test.describe('YamlLanguageGenerator', () => {
     expect(result).toContain(formatYaml({ button: 'right' }));
   });
 
+  test('should not emit invalid clickCount for right-click context menu', () => {
+    // Context menu right-clicks from the recorder have clickCount: 0
+    // This is invalid for the schema (minimum: 1), so it should be omitted
+    const action: actions.ClickAction = {
+      name: 'click',
+      selector: 'button',
+      signals: [],
+      button: 'right',
+      modifiers: 0,
+      clickCount: 0,       // Context menu right-click
+      position: undefined,
+    };
+
+    generator.generateHeader(createOptions());
+    const result = generator.generateAction(createAction(action));
+
+    expect(result).toContain(formatYaml({ action: 'click' }));
+    expect(result).toContain(formatYaml({ button: 'right' }));
+    // clickCount: 0 is invalid and should NOT appear in output
+    expect(result).not.toContain('clickCount:');
+  });
+
   test('should generate fill action', () => {
     const action: actions.FillAction = {
       name: 'fill',
@@ -312,10 +334,34 @@ test.describe('YamlLanguageGenerator', () => {
       signals: [],
     };
 
+    // closePage is only emitted for popup pages, not the main 'page'
+    const actionInContext: actions.ActionInContext = {
+      action,
+      frame: {
+        pageGuid: 'popup-guid',
+        pageAlias: 'popup1',
+        framePath: [],
+      },
+      startTime: Date.now(),
+    };
+
+    generator.generateHeader(createOptions());
+    const result = generator.generateAction(actionInContext);
+
+    expect(result).toContain(formatYaml({ action: 'closePage' }));
+  });
+
+  test('should not emit closePage for main page', () => {
+    const action: actions.ClosesPageAction = {
+      name: 'closePage',
+      signals: [],
+    };
+
+    // Closing the main 'page' is browser cleanup, not a scenario step
     generator.generateHeader(createOptions());
     const result = generator.generateAction(createAction(action));
 
-    expect(result).toContain(formatYaml({ action: 'closePage' }));
+    expect(result).toBe('');
   });
 
   test('should handle frame paths', () => {

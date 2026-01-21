@@ -943,6 +943,10 @@ export class YamlLanguageGenerator implements LanguageGenerator {
 
       // --- closePage ---------------------------------------------
       case 'closePage': {
+        // Skip closePage for main page (browser cleanup), keep for popups
+        const pageAlias = actionInContext.frame.pageAlias;
+        if (!pageAlias || pageAlias === 'page')
+          return out.join('\n');
         step.action = 'closePage';
         break;
       }
@@ -970,7 +974,11 @@ export class YamlLanguageGenerator implements LanguageGenerator {
     if (this._debug)
       step.debug = debug;
 
-    out.push(formatAsYamlListItem(stripDefaults(step), this._dumpOpts));
+    const stripped = stripDefaults(step);
+    // closePage requires selector per schema, restore if stripped
+    if (action.name === 'closePage' && !stripped.selector)
+      stripped.selector = {};
+    out.push(formatAsYamlListItem(stripped, this._dumpOpts));
     return out.join('\n');
   }
 
