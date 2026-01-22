@@ -31,6 +31,7 @@ import { Frame } from './frames';
 import { Page } from './page';
 import { performAction } from './recorder/recorderRunner';
 
+import { scheduleDumpFrameTree } from './utils/debugDumpHtml';
 import type { Language } from './codegen/types';
 import type { CallMetadata, InstrumentationListener, SdkObject } from './instrumentation';
 import type { Point } from '../utils/isomorphic/types';
@@ -545,12 +546,14 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
   private _onFrameNavigated(frame: Frame, page: Page) {
     const pageAlias = this._pageAliases.get(page);
     this._signalProcessor.signal(pageAlias!, frame, { name: 'navigation', url: frame.url() });
+    scheduleDumpFrameTree(page, pageAlias!);
   }
 
   private _onPopup(page: Page, popup: Page) {
     const pageAlias = this._pageAliases.get(page)!;
     const popupAlias = this._pageAliases.get(popup)!;
     this._signalProcessor.signal(pageAlias, page.mainFrame(), { name: 'popup', popupAlias });
+    scheduleDumpFrameTree(page, popupAlias!);
   }
 
   private _onDownload(page: Page) {
