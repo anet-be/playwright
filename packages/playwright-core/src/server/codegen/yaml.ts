@@ -871,7 +871,8 @@ export class YamlLanguageGenerator implements LanguageGenerator {
           step.action = 'dblclick';
         } else {
           step.action = 'click';
-          if (action.clickCount !== 1)
+          // Only emit clickCount if > 1 (0 is invalid per schema, 1 is default)
+          if (action.clickCount > 1)
             step.clickCount = action.clickCount;
         }
         step.button = action.button;
