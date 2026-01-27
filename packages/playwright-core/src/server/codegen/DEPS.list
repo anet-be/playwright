@@ -1,3 +1,4 @@
 [*]
 ../../utils/
+../../utils/isomorphic/
 ../deviceDescriptors.ts

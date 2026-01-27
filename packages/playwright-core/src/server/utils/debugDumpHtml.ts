@@ -13,9 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import { promises as fs } from 'node:fs';
-import * as path from 'node:path';
-import { createHash } from 'node:crypto';
+import { promises as fs } from 'fs';
+import * as path from 'path';
+import { createHash } from 'crypto';
 import { debugLogger } from './debugLogger';
 import type { Page } from '../page';
 import type { Frame } from '../frames';

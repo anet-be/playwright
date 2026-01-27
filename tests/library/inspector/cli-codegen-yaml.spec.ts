@@ -15,6 +15,13 @@
  */
 
 import { test, expect } from './inspectorTest';
+import { YAML_DUMP_OPTIONS } from '../../../packages/playwright-core/src/server/codegen/yaml';
+import * as YAML from 'js-yaml';
+
+// Helper to format a value as YAML would format it (for robust test assertions)
+function formatYaml(obj: unknown): string {
+  return YAML.dump(obj, YAML_DUMP_OPTIONS).replace(/\r\n?/g, '\n').trim();
+}
 
 test('should print the correct YAML header', async ({ runCLI, server }) => {
   const cli = runCLI(['--target=yaml', server.EMPTY_PAGE]);
@@ -27,8 +34,9 @@ test('should print the correct YAML header', async ({ runCLI, server }) => {
 
 test('should record navigation', async ({ runCLI, server }) => {
   const cli = runCLI(['--target=yaml', server.EMPTY_PAGE]);
-  await cli.waitFor(`- action: 'navigate'`);
-  await cli.waitFor(`url: '${server.EMPTY_PAGE}'`);
+  await cli.waitFor(formatYaml({ action: 'navigate' }));
+  // URL is relative after baseURL extraction
+  await cli.waitFor(formatYaml({ url: '/empty.html' }));
 });
 
 test('should skip about:blank navigation', async ({ runCLI }) => {
