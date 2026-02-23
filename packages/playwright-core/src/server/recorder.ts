@@ -554,7 +554,7 @@ export class Recorder extends EventEmitter<RecorderEventMap> implements Instrume
     const pageAlias = this._pageAliases.get(page)!;
     const popupAlias = this._pageAliases.get(popup)!;
     this._signalProcessor.signal(pageAlias, page.mainFrame(), { name: 'popup', popupAlias });
-    scheduleDumpFrameTree(page, popupAlias!);
+    scheduleDumpFrameTree(popup, popupAlias!);
   }
 
   private _onDownload(page: Page) {
