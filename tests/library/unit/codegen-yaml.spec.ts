@@ -576,6 +576,25 @@ test.describe('YamlLanguageGenerator', () => {
     expect(result).toContain(formatYaml({ css: 'button' }));
   });
 
+  test('should emit includeHidden for role selectors', () => {
+    const action: actions.ClickAction = {
+      name: 'click',
+      selector: 'internal:role=button[include-hidden]',
+      signals: [],
+      button: 'left',
+      modifiers: 0,
+      clickCount: 1,
+      position: undefined,
+    };
+
+    generator.generateHeader(createOptions());
+    const result = generator.generateAction(createAction(action));
+
+    expect(result).toContain(formatYaml({ role: 'button' }));
+    expect(result).toContain(formatYaml({ includeHidden: true }));
+    expect(result).not.toContain('include_hidden:');
+  });
+
   // Tests for default value omission
   test('should omit default button value on click', () => {
     const action: actions.ClickAction = {

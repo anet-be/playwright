@@ -506,7 +506,7 @@ function elementFromParsedSelector(raw?: string, debug?: YamlDebugInfo): ParsedS
           case 'include-hidden': {
             const v = asBool();
             if (v !== undefined)
-              element.include_hidden = v;
+              element.includeHidden = v;
             break;
           }
 
